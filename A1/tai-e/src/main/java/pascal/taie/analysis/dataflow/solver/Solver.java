@@ -24,7 +24,11 @@ package pascal.taie.analysis.dataflow.solver;
 
 import pascal.taie.analysis.dataflow.analysis.DataflowAnalysis;
 import pascal.taie.analysis.dataflow.fact.DataflowResult;
+import pascal.taie.analysis.dataflow.fact.SetFact;
 import pascal.taie.analysis.graph.cfg.CFG;
+import pxb.android.arsc.ResSpec;
+
+import java.util.Set;
 
 /**
  * Base class for data-flow analysis solver, which provides common
@@ -45,7 +49,8 @@ public abstract class Solver<Node, Fact> {
      * Static factory method to create a new solver for given analysis.
      */
     public static <Node, Fact> Solver<Node, Fact> makeSolver(
-            DataflowAnalysis<Node, Fact> analysis) {
+            DataflowAnalysis<Node, Fact> analysis
+    ) {
         return new IterativeSolver<>(analysis);
     }
 
@@ -80,8 +85,21 @@ public abstract class Solver<Node, Fact> {
         throw new UnsupportedOperationException();
     }
 
+    /**
+     * Initialize the algorithm: in[exit] = empty, in[B] = empty
+     *
+     * @param cfg the control-flow graph of given program
+     * @param result an object which manages the data-flow facts associated with nodes
+     */
     protected void initializeBackward(CFG<Node> cfg, DataflowResult<Node, Fact> result) {
-        // TODO - finish me
+        /* Initialize the in fact of all nodes, including the exit node. */
+        for (Node node : cfg.getNodes()) {
+            result.setInFact(node, analysis.newInitialFact());
+            result.setOutFact(node, analysis.newInitialFact());
+        }
+
+        /* Re-initialize the boundary fact of exit node. */
+        result.setInFact(cfg.getExit(), analysis.newBoundaryFact(cfg));
     }
 
     /**
