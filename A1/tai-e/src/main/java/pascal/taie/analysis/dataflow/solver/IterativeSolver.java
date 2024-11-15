@@ -46,17 +46,9 @@ class IterativeSolver<Node, Fact> extends Solver<Node, Fact> {
 
     @Override
     protected void doSolveBackward(CFG<Node> cfg, DataflowResult<Node, Fact> result) {
-        Set<Node> handedNodes = new HashSet<>();
-        Node exitNode = cfg.getExit();
-
         // if changes to any IN occurs
-        boolean changed;
-        do {
+        while (handleNodeBackwardBFS(cfg, result))
             cnt_iter++;
-            handedNodes.clear();
-            changed = handleNodeBackward(cfg, exitNode, result, handedNodes);
-            // changed = handleNodeBackwardBFS(cfg, result);
-        } while (changed);
         System.out.println("cnt_iter = " + cnt_iter);
     }
 
@@ -71,32 +63,6 @@ class IterativeSolver<Node, Fact> extends Solver<Node, Fact> {
             analysis.meetInto(result.getInFact(successor), outFact);
         }
         return outFact;
-    }
-
-    /**
-     * handle the given node (i.e. applying the transfer function) iteratively backwards.
-     *
-     * @param handledNode the handled node
-     * @return true if the changes to any IN occur, otherwise false.
-     */
-    private boolean handleNodeBackward(CFG<Node> cfg, Node node, DataflowResult<Node, Fact> result,
-            Set<Node> handledNode
-    ) {
-        if (handledNode.contains(node)) {
-            return false;
-        }
-        handledNode.add(node);  // label the node
-
-        Fact outFact = calOutFact(cfg, node, result);
-        boolean changed = analysis.transferNode(node, result.getInFact(node), outFact);
-
-        // handle the predecessors iteratively
-        Set<Node> predecessors = cfg.getPredsOf(node);
-        for (Node predecessor : predecessors) {
-            changed = changed || handleNodeBackward(cfg, predecessor, result, handledNode);
-        }
-
-        return changed;
     }
 
     /**

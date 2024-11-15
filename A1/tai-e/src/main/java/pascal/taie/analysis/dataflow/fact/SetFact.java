@@ -131,6 +131,7 @@ public class SetFact<E> {
      * Creates and returns a copy of this fact.
      */
     public SetFact<E> copy() {
+        /* The arg set is copied in the constructor. */
         return new SetFact<>(this.set);
     }
 
