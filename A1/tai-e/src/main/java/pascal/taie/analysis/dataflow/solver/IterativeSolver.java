@@ -26,7 +26,14 @@ import pascal.taie.analysis.dataflow.analysis.DataflowAnalysis;
 import pascal.taie.analysis.dataflow.fact.DataflowResult;
 import pascal.taie.analysis.graph.cfg.CFG;
 
+import java.util.HashSet;
+import java.util.LinkedList;
+import java.util.Queue;
+import java.util.Set;
+
 class IterativeSolver<Node, Fact> extends Solver<Node, Fact> {
+
+    private int cnt_iter = 0;
 
     public IterativeSolver(DataflowAnalysis<Node, Fact> analysis) {
         super(analysis);
@@ -39,6 +46,82 @@ class IterativeSolver<Node, Fact> extends Solver<Node, Fact> {
 
     @Override
     protected void doSolveBackward(CFG<Node> cfg, DataflowResult<Node, Fact> result) {
-        // TODO - finish me
+        Set<Node> handedNodes = new HashSet<>();
+        Node exitNode = cfg.getExit();
+
+        // if changes to any IN occurs
+        boolean changed;
+        do {
+            cnt_iter++;
+            handedNodes.clear();
+            changed = handleNodeBackward(cfg, exitNode, result, handedNodes);
+            // changed = handleNodeBackwardBFS(cfg, result);
+        } while (changed);
+        System.out.println("cnt_iter = " + cnt_iter);
+    }
+
+    /**
+     * recalculate the output of given node in the cfg.
+     * needn't keeping the output state.
+     * Output[Fact] = ∪ (S a successor of B) In[S]
+     */
+    private Fact calOutFact(CFG<Node> cfg, Node node, DataflowResult<Node, Fact> result) {
+        Fact outFact = result.getOutFact(node);
+        for (Node successor : cfg.getSuccsOf(node)) {
+            analysis.meetInto(result.getInFact(successor), outFact);
+        }
+        return outFact;
+    }
+
+    /**
+     * handle the given node (i.e. applying the transfer function) iteratively backwards.
+     *
+     * @param handledNode the handled node
+     * @return true if the changes to any IN occur, otherwise false.
+     */
+    private boolean handleNodeBackward(CFG<Node> cfg, Node node, DataflowResult<Node, Fact> result,
+            Set<Node> handledNode
+    ) {
+        if (handledNode.contains(node)) {
+            return false;
+        }
+        handledNode.add(node);  // label the node
+
+        Fact outFact = calOutFact(cfg, node, result);
+        boolean changed = analysis.transferNode(node, result.getInFact(node), outFact);
+
+        // handle the predecessors iteratively
+        Set<Node> predecessors = cfg.getPredsOf(node);
+        for (Node predecessor : predecessors) {
+            changed = changed || handleNodeBackward(cfg, predecessor, result, handledNode);
+        }
+
+        return changed;
+    }
+
+    /**
+     * handle the given node (i.e. applying the transfer function) iteratively backwards with BFS.
+     *
+     * @return true if the changes to any IN occur, otherwise false.
+     */
+    private boolean handleNodeBackwardBFS(CFG<Node> cfg, DataflowResult<Node, Fact> result
+    ) {
+        Queue<Node> workList = new LinkedList<>();
+        workList.add(cfg.getExit());
+        HashSet<Node> handledNodes = new HashSet<>();
+        boolean changed = false;
+
+        while (!workList.isEmpty()) {
+            Node node = workList.poll();
+            if (handledNodes.contains(node)) {
+                continue;
+            }
+            handledNodes.add(node);
+            Fact outFact = calOutFact(cfg, node, result);
+            changed = changed || analysis.transferNode(node, result.getInFact(node), outFact);
+            workList.addAll(cfg.getPredsOf(node));
+        }
+
+        return changed;
     }
 }
