@@ -95,6 +95,7 @@ public abstract class Solver<Node, Fact> {
         /* Initialize the in fact of all nodes, including the exit node. */
         for (Node node : cfg.getNodes()) {
             result.setInFact(node, analysis.newInitialFact());
+            // avoid the out state is null
             result.setOutFact(node, analysis.newInitialFact());
         }
 
