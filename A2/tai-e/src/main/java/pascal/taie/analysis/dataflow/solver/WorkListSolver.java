@@ -50,26 +50,6 @@ class WorkListSolver<Node, Fact> extends Solver<Node, Fact> {
         }
     }
 
-    /** Add all node in the work list except the entry & exit node. */
-    private void initializeWorkListForward(CFG<Node> cfg, Queue<Node> workList) {
-        Set<Node> addedNode = new HashSet<>();
-        Queue<Node> nodeQueue = new LinkedList<>();
-        // add the sucessors of entry
-        Set<Node> succsOfEntry = cfg.getSuccsOf(cfg.getEntry());
-        nodeQueue.addAll(succsOfEntry);
-        while (!nodeQueue.isEmpty()) {
-            Node node = nodeQueue.poll();
-            if (addedNode.contains(node) || node.equals(cfg.getExit())) {
-                continue;
-            }
-            addedNode.add(node);
-
-            workList.add(node);
-
-            nodeQueue.addAll(cfg.getSuccsOf(node));
-        }
-    }
-
     /** Iterate the node in the work list until the work list is empty. */
     private void iterateWorkList(Queue<Node> workList, CFG<Node> cfg,
             DataflowResult<Node, Fact> result
