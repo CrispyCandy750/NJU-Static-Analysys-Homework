@@ -129,21 +129,17 @@ public class ConstantPropagation extends
 
     /**
      * Apply the transfer function to in fact.
-     *
-     * @return true if the stmt contains RValue, which means the transfer function can be applied
-     * successfully.
      */
-    private boolean updateInFact(Stmt stmt, CPFact in) {
+    private void updateInFact(Stmt stmt, CPFact in) {
         Var var = (Var) stmt.getDef().get();
 
         List<RValue> uses = stmt.getUses();
         if (uses == null || uses.isEmpty()) {
-            return false;
+            return;
         }
 
         RValue rExp = uses.get(uses.size() - 1);  // the last elem is binary expression.
         in.update(var, evaluate(rExp, in));
-        return true;
     }
 
     /** @return true if the given stmt contains defined int variable. */
