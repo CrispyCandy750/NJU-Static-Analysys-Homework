@@ -32,7 +32,6 @@ import pascal.taie.language.type.Type;
 import pascal.taie.util.AnalysisException;
 
 import java.util.List;
-import java.util.Map;
 import java.util.Optional;
 
 public class ConstantPropagation extends
@@ -61,7 +60,9 @@ public class ConstantPropagation extends
         Value nac = Value.getNAC();
 
         for (Var param : cfg.getIR().getParams()) {
-            boundaryFact.update(param, nac);
+            if (canHoldInt(param)) {
+                boundaryFact.update(param, nac);
+            }
         }
 
         return boundaryFact;
@@ -120,7 +121,6 @@ public class ConstantPropagation extends
      */
     @Override
     public boolean transferNode(Stmt stmt, CPFact in, CPFact out) {
-        CPFact sourceOut = out.copy();
         if (isIntVarDef(stmt)) {
             updateInFact(stmt, in);
         }
@@ -185,7 +185,7 @@ public class ConstantPropagation extends
      * @return the resulting {@link Value}
      */
     public static Value evaluate(Exp exp, CPFact in) {
-        if (exp instanceof Var) { // exp is a var
+        if (exp instanceof Var) {
             return in.get((Var) exp);
         } else if (exp instanceof IntLiteral) {  // exp is an integer literal
             return Value.makeConstant(((IntLiteral) exp).getValue());
@@ -202,18 +202,34 @@ public class ConstantPropagation extends
         Value operand1Val = in.get(binaryExp.getOperand1());
         Value operand2Val = in.get(binaryExp.getOperand2());
 
-        if (operand1Val.isNAC() || operand2Val.isNAC()) {
+        if (isNACDivOrRemZero(binaryExp, operand1Val, operand2Val)) {
+            return Value.getUndef();
+        } else if (operand1Val.isNAC() || operand2Val.isNAC()) {
             return Value.getNAC();
         } else if (operand1Val.isUndef() || operand2Val.isUndef()) {
             return Value.getUndef();
-        } else {
+        } else { // operand1 and operand2 are both constants.
             return BinaryExpEvaluation.evaluateBinaryOps(binaryExp, operand1Val, operand2Val);
         }
     }
 
+    /** @return true if the exp is (NAC / 0) or (NAC % 0), false otherwise. */
+    private static boolean isNACDivOrRemZero(BinaryExp binaryExp, Value operand1, Value operand2) {
+        /* Check Type. */
+        if (!(binaryExp instanceof ArithmeticExp) || !operand1.isNAC() || !operand2.isConstant()) {
+            return false;
+        }
+
+        /* Check Value. */
+        ArithmeticExp.Op op = ((ArithmeticExp) binaryExp).getOperator();
+        return (op.equals(ArithmeticExp.Op.DIV) || op.equals(ArithmeticExp.Op.REM)) // op check
+                && operand2.getConstant() == 0;
+    }
+
+
     /**
      * Util Class to evaluate the binary expression.
-     * These methods should be implemented in BinaryExp class and its subclass.
+     * These methods should be implemented in BinaryExp class and its subclass for polymorphism.
      */
     private static class BinaryExpEvaluation {
 
@@ -223,8 +239,8 @@ public class ConstantPropagation extends
 
         /**
          * @param binaryExp a binary expression contains the symbols of operand1 and operand2
-         * @param operand1 the Value of operand1
-         * @param operand2 the Value of operand2
+         * @param operand1 the Value of operand1, which is a constant Value
+         * @param operand2 the Value of operand2, which is a constant Value
          * @return the operation result of operand1 & operand2.
          */
         private static Value evaluateBinaryOps(BinaryExp binaryExp, Value operand1, Value operand2
@@ -260,9 +276,9 @@ public class ConstantPropagation extends
                 case SUB -> Value.makeConstant(operand1 - operand2);
                 case MUL -> Value.makeConstant(operand1 * operand2);
                 case DIV ->
-                        operand2 == 0 ? Value.getNAC() : Value.makeConstant(operand1 / operand2);
+                        operand2 == 0 ? Value.getUndef() : Value.makeConstant(operand1 / operand2);
                 case REM ->
-                        operand2 == 0 ? Value.getNAC() : Value.makeConstant(operand1 % operand2);
+                        operand2 == 0 ? Value.getUndef() : Value.makeConstant(operand1 % operand2);
             };
         }
 
