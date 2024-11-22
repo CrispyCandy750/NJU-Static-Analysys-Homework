@@ -26,15 +26,80 @@ import pascal.taie.analysis.dataflow.analysis.DataflowAnalysis;
 import pascal.taie.analysis.dataflow.fact.DataflowResult;
 import pascal.taie.analysis.graph.cfg.CFG;
 
+import java.util.*;
+
 class WorkListSolver<Node, Fact> extends Solver<Node, Fact> {
 
     WorkListSolver(DataflowAnalysis<Node, Fact> analysis) {
         super(analysis);
     }
 
-    @Override
     protected void doSolveForward(CFG<Node> cfg, DataflowResult<Node, Fact> result) {
-        // TODO - finish me
+        Queue<Node> workList = new LinkedList<>();
+        initializeWorkList(cfg, workList);
+        iterateWorkList(workList, cfg, result);
+    }
+
+    /** Add all node in the work list except the entry & exit node. */
+    private void initializeWorkList(CFG<Node> cfg, Queue<Node> workList) {
+        for (Node node : cfg.getNodes()) {
+            if (node.equals(cfg.getEntry()) || node.equals(cfg.getExit())) {
+                continue;
+            }
+            workList.add(node);
+        }
+    }
+
+    /** Add all node in the work list except the entry & exit node. */
+    private void initializeWorkListForward(CFG<Node> cfg, Queue<Node> workList) {
+        Set<Node> addedNode = new HashSet<>();
+        Queue<Node> nodeQueue = new LinkedList<>();
+        // add the sucessors of entry
+        Set<Node> succsOfEntry = cfg.getSuccsOf(cfg.getEntry());
+        nodeQueue.addAll(succsOfEntry);
+        while (!nodeQueue.isEmpty()) {
+            Node node = nodeQueue.poll();
+            if (addedNode.contains(node) || node.equals(cfg.getExit())) {
+                continue;
+            }
+            addedNode.add(node);
+
+            workList.add(node);
+
+            nodeQueue.addAll(cfg.getSuccsOf(node));
+        }
+    }
+
+    /** Iterate the node in the work list until the work list is empty. */
+    private void iterateWorkList(Queue<Node> workList, CFG<Node> cfg,
+            DataflowResult<Node, Fact> result
+    ) {
+        while (!workList.isEmpty()) {
+            Node node = workList.poll();
+            if (analysis.transferNode(node, calInFact(node, cfg, result),
+                    result.getOutFact(node))) {
+                //                workList.addAll(cfg.getSuccsOf(node));
+                addAllSuccsToWorkList(node, cfg, workList);
+            }
+        }
+    }
+
+    /** Add all successors of given node to work list, ignoring the existed node. */
+    private void addAllSuccsToWorkList(Node node, CFG<Node> cfg, Queue<Node> workList) {
+        for (Node successor : cfg.getSuccsOf(node)) {
+            if (!workList.contains(successor)) {
+                workList.add(successor);
+            }
+        }
+    }
+
+    /** @return the recalculated in fact of given node. */
+    private Fact calInFact(Node node, CFG<Node> cfg, DataflowResult<Node, Fact> result) {
+        Fact inFact = result.getInFact(node);
+        for (Node pred : cfg.getPredsOf(node)) {
+            analysis.meetInto(result.getOutFact(pred), inFact);
+        }
+        return inFact;
     }
 
     @Override
