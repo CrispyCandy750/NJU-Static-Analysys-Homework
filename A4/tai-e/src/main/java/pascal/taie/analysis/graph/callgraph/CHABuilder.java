@@ -30,7 +30,8 @@ import pascal.taie.language.classes.JClass;
 import pascal.taie.language.classes.JMethod;
 import pascal.taie.language.classes.Subsignature;
 
-import java.util.ArrayDeque;
+import java.util.HashSet;
+import java.util.LinkedList;
 import java.util.Queue;
 import java.util.Set;
 
@@ -50,16 +51,100 @@ class CHABuilder implements CGBuilder<Invoke, JMethod> {
     private CallGraph<Invoke, JMethod> buildCallGraph(JMethod entry) {
         DefaultCallGraph callGraph = new DefaultCallGraph();
         callGraph.addEntryMethod(entry);
-        // TODO - finish me
+        fillCallGraph(callGraph, entry);
         return callGraph;
+    }
+
+    /** Fill the call graph with edges and reachable methods. */
+    private void fillCallGraph(DefaultCallGraph callGraph, JMethod entry) {
+        Queue<JMethod> workList = new LinkedList<>();
+        workList.add(entry);
+        iterateWorkList(workList, callGraph);
+    }
+
+    /** Iterate the workList and fill the call graph until the list is empty. */
+    private void iterateWorkList(Queue<JMethod> workList, DefaultCallGraph callGraph) {
+        while (!workList.isEmpty()) {
+            JMethod jMethod = workList.poll();
+            if (callGraph.contains(jMethod)) {
+                continue;
+            }
+            callGraph.addReachableMethod(jMethod);
+            callGraph.callSitesIn(jMethod).forEach(invoke -> {
+                for (JMethod targetMethod : resolve(invoke)) {
+                    callGraph.addEdge(new Edge<>(CallGraphs.getCallKind(invoke), invoke, targetMethod));
+                    workList.add(targetMethod);
+                }
+            });
+        }
     }
 
     /**
      * Resolves call targets (callees) of a call site via CHA.
      */
     private Set<JMethod> resolve(Invoke callSite) {
-        // TODO - finish me
-        return null;
+        Set<JMethod> targetMethods = new HashSet<>();
+
+        MethodRef methodRef = callSite.getMethodRef();
+        JClass declaringClass = methodRef.getDeclaringClass();
+        Subsignature subsignature = methodRef.getSubsignature();
+
+        if (callSite.isStatic()) {  // static call
+            targetMethods.add(declaringClass.getDeclaredMethod(subsignature));
+        } else if (callSite.isSpecial()) {  // special call
+            JMethod specialCallTarget = dispatch(declaringClass, subsignature);
+            if (specialCallTarget != null) {
+                targetMethods.add(specialCallTarget);
+            }
+        } else if (callSite.isVirtual()) {  // virtual call
+            fillWithAllSubClassMethod(targetMethods, declaringClass, subsignature);
+        } else if (callSite.isInterface()) {  // interface call
+            fillWithAllSubInterfaceMethod(targetMethods, declaringClass, subsignature);
+        }
+
+        return targetMethods;
+    }
+
+    /**
+     * Fill the targetMethods set with target method of subInterfaces.
+     *
+     * @param jInterface is an interface.
+     */
+    private void fillWithAllSubInterfaceMethod(Set<JMethod> targetMethods, JClass jInterface,
+            Subsignature subsignature
+    ) {
+        for (JClass subInterface : hierarchy.getDirectSubinterfacesOf(jInterface)) {
+            fillWithAllSubInterfaceMethod(targetMethods, subInterface, subsignature);
+        }
+        for (JClass subImplementor : hierarchy.getDirectImplementorsOf(jInterface)) {
+            fillWithAllSubClassMethod(targetMethods, subImplementor, subsignature);
+        }
+    }
+
+    /**
+     * Fill the targetMethods set with target method of subInterfaces.
+     *
+     * @param jClass is a class but not interface.
+     */
+    private void fillWithAllSubClassMethod(Set<JMethod> targetMethods, JClass jClass,
+            Subsignature subsignature
+    ) {
+        if (jClass == null) {
+            return;
+        }
+
+        JMethod targetMethod = dispatch(jClass, subsignature);
+        if (targetMethods.contains(targetMethod)) {  // avoid the duplicated paths
+            return;
+        }
+
+        if (targetMethod != null) {
+            targetMethods.add(targetMethod);
+        }
+
+        for (JClass subClass : hierarchy.getDirectSubclassesOf(jClass)) {
+            fillWithAllSubClassMethod(targetMethods, subClass, subsignature);
+        }
     }
 
     /**
@@ -69,7 +154,17 @@ class CHABuilder implements CGBuilder<Invoke, JMethod> {
      * can be found.
      */
     private JMethod dispatch(JClass jclass, Subsignature subsignature) {
-        // TODO - finish me
-        return null;
+
+        // base case
+        if (jclass == null) {
+            return null;
+        }
+
+        JMethod declaredMethod = jclass.getDeclaredMethod(subsignature);
+        if (declaredMethod != null && !declaredMethod.isAbstract()) {
+            return declaredMethod;
+        }
+
+        return dispatch(jclass.getSuperClass(), subsignature);
     }
 }
