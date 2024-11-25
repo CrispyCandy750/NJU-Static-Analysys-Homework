@@ -1,0 +1,7 @@
+-------------------- <MyProgram: void <init>()> (livevar) --------------------
+[0@L1] invokespecial %this.<java.lang.Object: void <init>()>(); []
+[1@L1] return; []
+
+-------------------- <MyProgram: int test(java.lang.String[])> (livevar) --------------------
+[0@L2] temp$0 = 0; [temp$0]
+[1@L3] return temp$0; []
