@@ -22,8 +22,10 @@
 
 package pascal.taie.analysis.dataflow.inter;
 
+import jas.CP;
 import pascal.taie.analysis.dataflow.analysis.constprop.CPFact;
 import pascal.taie.analysis.dataflow.analysis.constprop.ConstantPropagation;
+import pascal.taie.analysis.dataflow.analysis.constprop.Value;
 import pascal.taie.analysis.graph.cfg.CFG;
 import pascal.taie.analysis.graph.cfg.CFGBuilder;
 import pascal.taie.analysis.graph.icfg.CallEdge;
@@ -33,10 +35,16 @@ import pascal.taie.analysis.graph.icfg.ReturnEdge;
 import pascal.taie.config.AnalysisConfig;
 import pascal.taie.ir.IR;
 import pascal.taie.ir.exp.InvokeExp;
+import pascal.taie.ir.exp.LValue;
+import pascal.taie.ir.exp.RValue;
 import pascal.taie.ir.exp.Var;
 import pascal.taie.ir.stmt.Invoke;
 import pascal.taie.ir.stmt.Stmt;
 import pascal.taie.language.classes.JMethod;
+import pascal.taie.util.AnalysisException;
+
+import java.util.List;
+import java.util.Optional;
 
 /**
  * Implementation of interprocedural constant propagation for int values.
@@ -74,39 +82,98 @@ public class InterConstantPropagation extends
         cp.meetInto(fact, target);
     }
 
+    /** Call Node does nothing. */
     @Override
     protected boolean transferCallNode(Stmt stmt, CPFact in, CPFact out) {
-        // TODO - finish me
-        return false;
+        return out.copyFrom(in);
     }
 
+    /** Non Call Node does the same things as intraproducural constant propagation. */
     @Override
     protected boolean transferNonCallNode(Stmt stmt, CPFact in, CPFact out) {
-        // TODO - finish me
-        return false;
+        return cp.transferNode(stmt, in, out);
     }
 
+    /** Normal edge does nothing. */
     @Override
     protected CPFact transferNormalEdge(NormalEdge<Stmt> edge, CPFact out) {
-        // TODO - finish me
-        return null;
+        return out.copy();
     }
 
+    /** Call to return edge kill the (Var) lValue of call site. */
     @Override
     protected CPFact transferCallToReturnEdge(CallToReturnEdge<Stmt> edge, CPFact out) {
-        // TODO - finish me
-        return null;
+        CPFact outFactCopy = out.copy();
+
+        Var defVar = getDefVar(edge.getSource());
+        if (defVar != null) {
+            outFactCopy.remove(defVar);
+        }
+
+        return outFactCopy;
     }
 
+    /** param1 = val(arg1) */
     @Override
     protected CPFact transferCallEdge(CallEdge<Stmt> edge, CPFact callSiteOut) {
-        // TODO - finish me
-        return null;
+        List<Var> args = getInvokeArgs(edge.getSource());
+        List<Var> params = edge.getCallee().getIR().getParams();
+
+        if (args.size() != params.size()) {
+            throw new AnalysisException(
+                    "the sizes of the call site args and the callee params are not matched");
+        }
+
+        // only transfer params
+        CPFact res = new CPFact();
+        for (int i = 0; i < args.size(); i++) {
+            res.update(params.get(i), callSiteOut.get(args.get(i)));
+        }
+
+        return res;
+    }
+
+    /** @return the list of the args of the invokeExp. */
+    private List<Var> getInvokeArgs(Stmt stmt) {
+        if (!(stmt instanceof Invoke)) {
+            throw new AnalysisException(
+                    "the source of call edge " + stmt + " is not an invoke statement.");
+        }
+        Invoke invokeStmt = (Invoke) stmt;
+        return invokeStmt.getInvokeExp().getArgs();
     }
 
     @Override
     protected CPFact transferReturnEdge(ReturnEdge<Stmt> edge, CPFact returnOut) {
-        // TODO - finish me
+        CPFact res = new CPFact();
+
+        // use the lvalue of call site but not return site
+        Var defVar = getDefVar(edge.getCallSite());
+        if (defVar != null) {
+            res.update(defVar, getReturnValue(edge, returnOut));
+        }
+
+        return res;
+    }
+
+    /** @return defined var, if no define or defined lValue is not Var, return null. */
+    private Var getDefVar(Stmt returnSite) {
+        Optional<LValue> def = returnSite.getDef();
+        if (def.isPresent()) {
+            LValue lValue = def.get();
+            if (lValue instanceof Var) {
+                return (Var) lValue;
+            }
+        }
         return null;
+    }
+
+    /** @return the met return value (met with all return vars). */
+    private Value getReturnValue(ReturnEdge<Stmt> edge, CPFact returnOut) {
+        Value res = Value.getUndef();
+        for (Var returnVar : edge.getReturnVars()) {
+            res = cp.meetValue(res, returnOut.get(returnVar));
+        }
+        return res;
     }
 }
