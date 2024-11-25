@@ -24,11 +24,10 @@ package pascal.taie.analysis.dataflow.inter;
 
 import pascal.taie.analysis.dataflow.fact.DataflowResult;
 import pascal.taie.analysis.graph.icfg.ICFG;
-import pascal.taie.util.collection.SetQueue;
+import pascal.taie.analysis.graph.icfg.ICFGEdge;
 
+import java.util.LinkedList;
 import java.util.Queue;
-import java.util.Set;
-import java.util.stream.Collectors;
 
 /**
  * Solver for inter-procedural data-flow analysis.
@@ -46,7 +45,8 @@ class InterSolver<Method, Node, Fact> {
     private Queue<Node> workList;
 
     InterSolver(InterDataflowAnalysis<Node, Fact> analysis,
-                ICFG<Method, Node> icfg) {
+            ICFG<Method, Node> icfg
+    ) {
         this.analysis = analysis;
         this.icfg = icfg;
     }
@@ -58,11 +58,47 @@ class InterSolver<Method, Node, Fact> {
         return result;
     }
 
+    /**  */
     private void initialize() {
-        // TODO - finish me
+        // initial fact
+        for (Node node : icfg.getNodes()) {
+            result.setInFact(node, analysis.newInitialFact());
+            result.setOutFact(node, analysis.newInitialFact());
+        }
+
+        // boundary fact
+        icfg.entryMethods().forEach(entryMethod -> {
+            Node entryNodeOfProgram = icfg.getEntryOf(entryMethod);
+            result.setOutFact(entryNodeOfProgram, analysis.newBoundaryFact(entryNodeOfProgram));
+        });
     }
 
     private void doSolve() {
-        // TODO - finish me
+        Queue<Node> workList = new LinkedList<>(icfg.getNodes());
+        while (!workList.isEmpty()) {
+            Node node = workList.poll();
+            if (analysis.transferNode(node, calInFact(node), result.getOutFact(node))) {
+                addAllSuccsToWorkList(workList, node);
+            }
+        }
+    }
+
+    /** @return the recalculated in fact of given node. */
+    private Fact calInFact(Node node) {
+        Fact targetFact = result.getInFact(node);
+        for (ICFGEdge<Node> inEdge : icfg.getInEdgesOf(node)) {
+            Fact sourceFact = result.getOutFact(inEdge.getSource());
+            analysis.meetInto(analysis.transferEdge(inEdge, sourceFact), targetFact);
+        }
+        return targetFact;
+    }
+
+    /** Append all successors of node to work list. */
+    private void addAllSuccsToWorkList(Queue<Node> workList, Node node) {
+        for (Node successor : icfg.getSuccsOf(node)) {
+            if (!workList.contains(successor)) {
+                workList.add(successor);
+            }
+        }
     }
 }
