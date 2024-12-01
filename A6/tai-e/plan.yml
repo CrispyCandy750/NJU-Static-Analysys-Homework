@@ -2,7 +2,7 @@
   options: {}
 - id: cspta
   options:
-    cs: ci
+    cs: 2-type
     merge-string-constants: false
     merge-string-objects: false
     merge-string-builders: false

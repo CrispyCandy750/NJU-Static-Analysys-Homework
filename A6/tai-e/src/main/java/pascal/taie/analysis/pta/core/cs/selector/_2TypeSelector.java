@@ -28,8 +28,11 @@ import pascal.taie.analysis.pta.core.cs.element.CSCallSite;
 import pascal.taie.analysis.pta.core.cs.element.CSMethod;
 import pascal.taie.analysis.pta.core.cs.element.CSObj;
 import pascal.taie.analysis.pta.core.heap.Obj;
+import pascal.taie.language.classes.JClass;
 import pascal.taie.language.classes.JMethod;
 import pascal.taie.language.type.Type;
+
+import java.util.Optional;
 
 /**
  * Implementation of 2-type sensitivity.
@@ -43,19 +46,28 @@ public class _2TypeSelector implements ContextSelector {
 
     @Override
     public Context selectContext(CSCallSite callSite, JMethod callee) {
-        // TODO - finish me
-        return null;
+        return callSite.getContext();
     }
 
     @Override
     public Context selectContext(CSCallSite callSite, CSObj recv, JMethod callee) {
-        // TODO - finish me
-        return null;
+        JClass declaringClass = recv.getObject().getContainerMethod().get().getDeclaringClass();
+        Context previousContext = recv.getContext();
+        if (previousContext.getLength() == 0) {
+            return ListContext.make(declaringClass);
+        } else {
+            return ListContext.make(previousContext.getElementAt(previousContext.getLength() - 1),
+                    declaringClass);
+        }
     }
 
     @Override
     public Context selectHeapContext(CSMethod method, Obj obj) {
-        // TODO - finish me
-        return null;
+        Context context = method.getContext();
+        if (context.getLength() == 0) {
+            return ListContext.make();
+        } else {
+            return ListContext.make(context.getElementAt(context.getLength() - 1));
+        }  // 这里没有注意heap-sensitivity的limit为1
     }
 }

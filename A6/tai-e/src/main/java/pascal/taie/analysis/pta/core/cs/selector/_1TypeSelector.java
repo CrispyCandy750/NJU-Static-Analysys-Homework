@@ -30,6 +30,8 @@ import pascal.taie.analysis.pta.core.cs.element.CSObj;
 import pascal.taie.analysis.pta.core.heap.Obj;
 import pascal.taie.language.classes.JMethod;
 
+import java.util.Optional;
+
 /**
  * Implementation of 1-type sensitivity.
  */
@@ -40,21 +42,26 @@ public class _1TypeSelector implements ContextSelector {
         return ListContext.make();
     }
 
+    /** @return context of call site */
     @Override
     public Context selectContext(CSCallSite callSite, JMethod callee) {
-        // TODO - finish me
-        return null;
+        return callSite.getContext();
     }
 
+    /** @return context of the class type of recv. */
     @Override
     public Context selectContext(CSCallSite callSite, CSObj recv, JMethod callee) {
-        // TODO - finish me
-        return null;
+        // return ListContext.make(callSite.getCallSite().getMethodRef().getDeclaringClass());
+        Optional<JMethod> containerMethod = recv.getObject().getContainerMethod();
+        if (containerMethod.isPresent()) {
+            return ListContext.make(containerMethod.get().getDeclaringClass());
+        }
+        return ListContext.make();
     }
 
+    /** @return empty context. */
     @Override
     public Context selectHeapContext(CSMethod method, Obj obj) {
-        // TODO - finish me
-        return null;
+        return ListContext.make();
     }
 }
