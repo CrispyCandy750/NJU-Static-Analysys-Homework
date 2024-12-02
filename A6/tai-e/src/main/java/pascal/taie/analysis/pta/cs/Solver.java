@@ -337,8 +337,10 @@ class Solver {
             }
         }
 
-        for (Pointer succ : pointerFlowGraph.getSuccsOf(pointer)) {
-            workList.addEntry(succ, ptsToPropagate);
+        if (!ptsToPropagate.isEmpty()) {
+            for (Pointer succ : pointerFlowGraph.getSuccsOf(pointer)) {
+                workList.addEntry(succ, ptsToPropagate);
+            }
         }
 
         return ptsToPropagate;
