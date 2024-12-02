@@ -51,12 +51,7 @@ public class _1TypeSelector implements ContextSelector {
     /** @return context of the class type of recv. */
     @Override
     public Context selectContext(CSCallSite callSite, CSObj recv, JMethod callee) {
-        // return ListContext.make(callSite.getCallSite().getMethodRef().getDeclaringClass());
-        Optional<JMethod> containerMethod = recv.getObject().getContainerMethod();
-        if (containerMethod.isPresent()) {
-            return ListContext.make(containerMethod.get().getDeclaringClass());
-        }
-        return ListContext.make();
+        return ListContext.make(recv.getObject().getContainerType());
     }
 
     /** @return empty context. */
