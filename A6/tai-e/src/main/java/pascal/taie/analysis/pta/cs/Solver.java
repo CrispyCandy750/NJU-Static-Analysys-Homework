@@ -100,22 +100,9 @@ class Solver {
         if (!callGraph.addReachableMethod(csMethod)) {
             return;
         }
-
         StmtProcessor stmtProcessor = new StmtProcessor(csMethod);
         for (Stmt stmt : csMethod.getMethod().getIR().getStmts()) {
-            if (stmt instanceof New newStmt) {  // i: x = New T()
-                newStmt.accept(stmtProcessor);
-            } else if (stmt instanceof Copy copyStmt) {  // x = y
-                copyStmt.accept(stmtProcessor);
-            } else if (stmt instanceof LoadField loadFieldStmt
-                    && loadFieldStmt.isStatic()) { // y = T.f
-                loadFieldStmt.accept(stmtProcessor);
-            } else if (stmt instanceof StoreField storeFieldStmt
-                    && storeFieldStmt.isStatic()) {  // T.f = y
-                storeFieldStmt.accept(stmtProcessor);
-            } else if (stmt instanceof Invoke invoke && invoke.isStatic()) {  // x = T.m()
-                invoke.accept(stmtProcessor);
-            }
+            stmt.accept(stmtProcessor);
         }
     }
 
@@ -141,8 +128,10 @@ class Solver {
 
         /** Process the new statement, add (var, pts) to WL */
         public Void visit(New newStmt) {
+            // the context of variables are always the context of the methods.
             CSVar csVar = csManager.getCSVar(context, newStmt.getLValue());
             Obj obj = heapModel.getObj(newStmt);
+            // the context of the object need to be selected.
             CSObj csObj = csManager.getCSObj(contextSelector.selectHeapContext(csMethod, obj), obj);
             workList.addEntry(csVar, PointsToSetFactory.make(csObj));
             return null;
@@ -180,7 +169,8 @@ class Solver {
         /** Process the static invoke. */
         public Void visit(Invoke invoke) {
             if (invoke.isStatic()) {
-                JMethod callee = invoke.getMethodRef().resolve();
+//                JMethod callee = invoke.getMethodRef().resolve();
+                JMethod callee = resolveCallee(null, invoke);
                 // select callee context
                 Context calleeContext = contextSelector.selectContext(
                         csManager.getCSCallSite(context, invoke), callee);
