@@ -360,9 +360,23 @@ class Solver {
             // add (callee:this, recvObj) to WL
             workList.addEntry(csManager.getCSVar(calleeContext, callee.getIR().getThis()),
                     PointsToSetFactory.make(recvObj));
-
-            addPFGInvokeEdgesAndCGEdge(CallKind.VIRTUAL, callerContext, invoke, calleeContext,
+            addPFGInvokeEdgesAndCGEdge(selectCallKind(invoke), callerContext, invoke, calleeContext,
                     callee);
+        }
+    }
+
+    /** @return the call kind of the given invoke statement. */
+    private CallKind selectCallKind(Invoke invoke) {
+        if (invoke.isVirtual()) {
+            return CallKind.VIRTUAL;
+        } else if (invoke.isInterface()) {
+            return CallKind.INTERFACE;
+        } else if (invoke.isDynamic()) {
+            return CallKind.DYNAMIC;
+        } else if (invoke.isSpecial()) {
+            return CallKind.SPECIAL;
+        } else {
+            return CallKind.STATIC;
         }
     }
 
