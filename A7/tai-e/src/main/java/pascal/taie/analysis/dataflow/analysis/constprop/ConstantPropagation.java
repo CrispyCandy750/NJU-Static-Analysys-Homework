@@ -24,20 +24,15 @@ package pascal.taie.analysis.dataflow.analysis.constprop;
 
 import pascal.taie.analysis.dataflow.analysis.AbstractDataflowAnalysis;
 import pascal.taie.analysis.graph.cfg.CFG;
-import pascal.taie.analysis.pta.PointerAnalysisResult;
-import pascal.taie.analysis.pta.core.heap.Obj;
 import pascal.taie.config.AnalysisConfig;
 import pascal.taie.ir.exp.*;
 import pascal.taie.ir.stmt.Stmt;
-import pascal.taie.ir.stmt.StoreField;
-import pascal.taie.language.classes.JField;
 import pascal.taie.language.type.PrimitiveType;
 import pascal.taie.language.type.Type;
 import pascal.taie.util.AnalysisException;
-import polyglot.ast.IntLit;
 
-import java.util.*;
-import java.util.zip.Inflater;
+import java.util.List;
+import java.util.Optional;
 
 public class ConstantPropagation extends
         AbstractDataflowAnalysis<Stmt, CPFact> {
@@ -126,8 +121,8 @@ public class ConstantPropagation extends
      */
     @Override
     public boolean transferNode(Stmt stmt, CPFact in, CPFact out) {
-        if (isIntDefinitionVarDef(stmt)) {
-            applyStmtFunctionToInFact(stmt, in);
+        if (isIntVarDef(stmt)) {
+            updateInFact(stmt, in);
         }
         return out.copyFrom(in);
     }
@@ -135,7 +130,7 @@ public class ConstantPropagation extends
     /**
      * Apply the transfer function to in fact.
      */
-    private void applyStmtFunctionToInFact(Stmt stmt, CPFact in) {
+    private void updateInFact(Stmt stmt, CPFact in) {
         Var var = (Var) stmt.getDef().get();
 
         List<RValue> uses = stmt.getUses();
@@ -148,7 +143,7 @@ public class ConstantPropagation extends
     }
 
     /** @return true if the given stmt contains defined int variable. */
-    public boolean isIntDefinitionVarDef(Stmt stmt) {
+    private boolean isIntVarDef(Stmt stmt) {
         Optional<LValue> lValueOptional = stmt.getDef();
         /* No variables are updated, out is not changed. */
         if (lValueOptional.isEmpty()) {
@@ -185,151 +180,17 @@ public class ConstantPropagation extends
      * @param in IN fact of the statement
      * @return the resulting {@link Value}
      */
-    public Value evaluate(Exp exp, CPFact in) {
-        if (exp instanceof Var var) {
-            return in.get(var);
-        } else if (exp instanceof IntLiteral intLiteral) {  // exp is an integer literal
-            return Value.makeConstant((intLiteral).getValue());
-        } else if (exp instanceof BinaryExp binaryExp) {  // exp is BinaryExp
-            return evaluateBinaryExp(binaryExp, in);
-        } else if (exp instanceof FieldAccess fieldAccess) {  // a = x.f
-            return evaluateFieldAccess(fieldAccess, in, null);
+    public static Value evaluate(Exp exp, CPFact in) {
+        if (exp instanceof Var) {
+            return in.get((Var) exp);
+        } else if (exp instanceof IntLiteral) {  // exp is an integer literal
+            return Value.makeConstant(((IntLiteral) exp).getValue());
+        } else if (exp instanceof BinaryExp) {  // exp is BinaryExp
+            return evaluateBinaryExp((BinaryExp) exp, in);
         } else {
             return Value.getNAC();
         }
     }
-
-    /** @return the Value of the */
-    private Value evaluateFieldAccess(FieldAccess fieldAccess, CPFact in,
-            PointerAnalysisResult pointerAnalysisResult
-    ) {
-        // 这里如果是怎么判断fieldAccess是静态的呢？
-        // 这里要in是没用的，因为CPFact是var→Value的映射
-        // 计算fieldAccess的Value，需要找到所有的别名，然后找到所有别名相关的Store语句
-        /*if (fieldAccess instanceof StaticFieldAccess staticFieldAccess) {
-
-        } else if (fieldAccess instanceof InstanceFieldAccess instanceFieldAccess) {
-            // 找到这个的base变量
-            instanceFieldAccess.accept()
-        } else {
-
-        }*/
-        ExpEvaluator expEvaluator = new ExpEvaluator(in, pointerAnalysisResult);
-        return fieldAccess.accept(expEvaluator);
-    }
-
-    private class ExpEvaluator implements ExpVisitor<Value> {
-        private final CPFact in;
-        private final PointerAnalysisResult pointerAnalysisResult;
-
-        /** alias.get(a) return all alias of variable a (including itself) */
-        private final Map<Var, Set<Var>> aliasesCache;
-
-        public ExpEvaluator(CPFact in, PointerAnalysisResult pointerAnalysisResult
-        ) {
-            this.in = in;
-            this.pointerAnalysisResult = pointerAnalysisResult;
-            this.aliasesCache = new HashMap<>();
-        }
-
-        /** @return the value corresponding to the var in the in fact. */
-        public Value visit(Var var) {
-            return in.get(var);
-        }
-
-        /** @return the true value of int literal. */
-        public Value visit(IntLiteral intLiteral) {
-            return Value.makeConstant(intLiteral.getValue());
-        }
-
-        /** @return the result of the binary expression. */
-        public Value visit(BinaryExp binaryExp) {
-            /* binaryExp only contains the symbol of operand1 and operand2, but the values of the
-        operands exits in the in fact. */
-            Value operand1Val = in.get(binaryExp.getOperand1());
-            Value operand2Val = in.get(binaryExp.getOperand2());
-
-            if (isNACDivOrRemZero(binaryExp, operand1Val, operand2Val)) {
-                return Value.getUndef();
-            } else if (operand1Val.isNAC() || operand2Val.isNAC()) {
-                return Value.getNAC();
-            } else if (operand1Val.isUndef() || operand2Val.isUndef()) {
-                return Value.getUndef();
-            } else { // operand1 and operand2 are both constants.
-                return BinaryExpEvaluation.evaluateBinaryOps(binaryExp, operand1Val, operand2Val);
-            }
-        }
-
-        /** @return true if the exp is (NAC / 0) or (NAC % 0), false otherwise. */
-        private static boolean isNACDivOrRemZero(BinaryExp binaryExp, Value operand1, Value operand2) {
-            /* Check Type. */
-            if (!(binaryExp instanceof ArithmeticExp) || !operand1.isNAC() || !operand2.isConstant()) {
-                return false;
-            }
-
-            /* Check Value. */
-            ArithmeticExp.Op op = ((ArithmeticExp) binaryExp).getOperator();
-            return (op.equals(ArithmeticExp.Op.DIV) || op.equals(ArithmeticExp.Op.REM)) // op check
-                    && operand2.getConstant() == 0;
-        }
-
-        /** @return the value of the instance field access: x.f */
-        @Override
-        public Value visit(InstanceFieldAccess instanceFieldAccess) {
-            // 首先获取base变量a,b,c，然后得到a,b,c相关的a.f, b.f, c.f的语句
-            Var base = instanceFieldAccess.getBase();
-            Set<Var> aliases = getAlias(base);
-            // 然后得到对应的store语句
-            return null;
-        }
-
-        /** @return the meet value of all aliases with given field store statement. */
-        private Value meetAliasField(Set<Var> aliases, JField field) {
-            Value res = Value.getUndef();
-            for (Var alias : aliases) {
-                res = meetValueStoredInGivenField(alias, field);
-            }
-            return res;
-        }
-
-        /** @return the meet value of all var.field = ... */
-        private Value meetValueStoredInGivenField(Var var, JField field) {
-            Value res = Value.getUndef();
-            for (StoreField storeField : var.getStoreFields()) {
-                if (storeField.getFieldRef().resolve().equals(field)) {
-                    res = meetValue(res, storeField.getRValue().accept(this));
-                }
-            }
-            return res;
-        }
-
-        /** @return all alias of given var, including itself. */
-        private Set<Var> getAlias(Var var) {
-            Set<Var> aliasOfVar = aliasesCache.getOrDefault(var, null);
-            if (aliasOfVar == null) {
-                aliasOfVar = findAliasOf(var);
-                aliasesCache.put(var, aliasOfVar);
-            }
-            return aliasOfVar;
-        }
-
-        /** @return all alias of given var, including itself. */
-        private Set<Var> findAliasOf(Var var) {
-
-            HashSet<Var> aliasOfVar = new HashSet<>();
-            Set<Obj> ptsOfVar = pointerAnalysisResult.getPointsToSet(var);
-
-            for (Var otherVar : pointerAnalysisResult.getVars()) {
-                if (Collections.disjoint(ptsOfVar,
-                        pointerAnalysisResult.getPointsToSet(otherVar))) {
-                    aliasOfVar.add(otherVar);
-                }
-            }
-
-            return aliasOfVar;
-        }
-    }
-
 
     private static Value evaluateBinaryExp(BinaryExp binaryExp, CPFact in) {
         /* binaryExp only contains the symbol of operand1 and operand2, but the values of the

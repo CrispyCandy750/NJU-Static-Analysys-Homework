@@ -25,20 +25,23 @@ package pascal.taie.analysis.dataflow.inter;
 import pascal.taie.World;
 import pascal.taie.analysis.dataflow.analysis.constprop.CPFact;
 import pascal.taie.analysis.dataflow.analysis.constprop.ConstantPropagation;
-import pascal.taie.analysis.graph.cfg.CFG;
+import pascal.taie.analysis.dataflow.analysis.constprop.Value;
 import pascal.taie.analysis.graph.cfg.CFGBuilder;
 import pascal.taie.analysis.graph.icfg.CallEdge;
 import pascal.taie.analysis.graph.icfg.CallToReturnEdge;
 import pascal.taie.analysis.graph.icfg.NormalEdge;
 import pascal.taie.analysis.graph.icfg.ReturnEdge;
 import pascal.taie.analysis.pta.PointerAnalysisResult;
+import pascal.taie.analysis.pta.core.heap.Obj;
 import pascal.taie.config.AnalysisConfig;
 import pascal.taie.ir.IR;
-import pascal.taie.ir.exp.InvokeExp;
-import pascal.taie.ir.exp.Var;
-import pascal.taie.ir.stmt.Invoke;
-import pascal.taie.ir.stmt.Stmt;
+import pascal.taie.ir.exp.*;
+import pascal.taie.ir.stmt.*;
+import pascal.taie.language.classes.JField;
 import pascal.taie.language.classes.JMethod;
+import pascal.taie.util.AnalysisException;
+
+import java.util.*;
 
 /**
  * Implementation of interprocedural constant propagation for int values.
@@ -50,6 +53,8 @@ public class InterConstantPropagation extends
 
     private final ConstantPropagation cp;
 
+    private PointerAnalysisResult pta;
+
     public InterConstantPropagation(AnalysisConfig config) {
         super(config);
         cp = new ConstantPropagation(new AnalysisConfig(ConstantPropagation.ID));
@@ -58,7 +63,7 @@ public class InterConstantPropagation extends
     @Override
     protected void initialize() {
         String ptaId = getOptions().getString("pta");
-        PointerAnalysisResult pta = World.get().getResult(ptaId);
+        pta = World.get().getResult(ptaId);
         // You can do initialization work here
     }
 
@@ -83,39 +88,218 @@ public class InterConstantPropagation extends
         cp.meetInto(fact, target);
     }
 
+    /**
+     * Call Node does nothing.
+     *
+     * @return true if out fact is changed, otherwise false.
+     */
     @Override
     protected boolean transferCallNode(Stmt stmt, CPFact in, CPFact out) {
-        // TODO - finish me
-        return false;
+        return out.copyFrom(in);
     }
 
+    /**
+     * Non Call Node (may) apply transfer function to in fact.
+     *
+     * @return true if out fact is changed, otherwise false.
+     */
     @Override
     protected boolean transferNonCallNode(Stmt stmt, CPFact in, CPFact out) {
-        // TODO - finish me
-        return false;
+        if (stmt instanceof LoadField loadField) {
+            return transferLoadField(loadField, in, out);
+        } else if (stmt instanceof LoadArray loadArray) {
+            return transferLoadArray(loadArray, in, out);
+        } else {
+            return cp.transferNode(stmt, in, out);
+        }
     }
 
+    /** @return true if out fact is changed, otherwise false. */
+    private boolean transferLoadField(LoadField loadField, CPFact in, CPFact out) {
+        in.update(loadField.getLValue(),
+                loadField.getRValue().accept(new ExpEvaluator(in, pta)));
+        return out.copyFrom(in);
+    }
+
+    /** @return true if out fact is changed, otherwise false. */
+    private boolean transferLoadArray(LoadArray loadArray, CPFact in, CPFact out) {
+        in.update(loadArray.getLValue(),
+                loadArray.getRValue().accept(new ExpEvaluator(in, pta)));
+        return out.copyFrom(in);
+    }
+
+    /** @return the copy of out fact: normal edge does nothing. */
     @Override
     protected CPFact transferNormalEdge(NormalEdge<Stmt> edge, CPFact out) {
-        // TODO - finish me
-        return null;
+        return out.copy();
     }
 
+    /**
+     * Call to Return Edge is from call site to the next statement of that in the same method.
+     * It kills the assignee of the call site from the out fact.
+     */
     @Override
     protected CPFact transferCallToReturnEdge(CallToReturnEdge<Stmt> edge, CPFact out) {
-        // TODO - finish me
-        return null;
+        CPFact targetFact = out.copy();
+
+        Optional<LValue> defOptional = edge.getSource().getDef();
+
+        if (defOptional.isPresent()) {  // Assignee of call site exists
+            LValue lValue = defOptional.get();
+            if (lValue instanceof Var assignee) {  // assignee is a variable
+                targetFact.remove(assignee);  // remove the assignee.
+            }
+        }
+
+        return targetFact;
     }
 
+    /**
+     * Call Edge is the edge connecting a call site to method entry of the callee.
+     * It transfers the value of arguments to parameters.
+     */
     @Override
     protected CPFact transferCallEdge(CallEdge<Stmt> edge, CPFact callSiteOut) {
-        // TODO - finish me
-        return null;
+        CPFact targetFact = new CPFact();
+        Stmt sourceStmt = edge.getSource();
+
+        if (!(sourceStmt instanceof Invoke callSite)) {
+            throw new AnalysisException("The call site of edge: " + edge + " is not an invoke");
+        }
+
+        List<Var> args = callSite.getInvokeExp().getArgs();
+        List<Var> params = edge.getCallee().getIR().getParams();
+
+        if (args.size() != params.size()) {
+            throw new AnalysisException(
+                    "The numbers of args and params of call site: " + callSite + " do not match!");
+        }
+
+        for (int i = 0; i < args.size(); i++) {
+            targetFact.update(params.get(i), callSiteOut.get(args.get(i)));
+        }
+
+        return targetFact;
     }
 
+    /**
+     * Return Edge is the edge connecting a method exit to return site of the call site.
+     * It transfers the meet value of all return vars of callee to assignee of call site.
+     */
     @Override
     protected CPFact transferReturnEdge(ReturnEdge<Stmt> edge, CPFact returnOut) {
-        // TODO - finish me
-        return null;
+        CPFact targetFact = new CPFact();
+        Optional<LValue> defOptional = edge.getCallSite().getDef();
+
+        if (defOptional.isPresent()) {
+            LValue lValue = defOptional.get();
+            if (lValue instanceof Var assignee) {
+                targetFact.update(assignee, meetValueOfReturnVars(edge.getReturnVars(), returnOut));
+            }
+        }
+
+        return targetFact;
+    }
+
+    /** @return the meet value of return vars. */
+    private Value meetValueOfReturnVars(Collection<Var> returnVars, CPFact returnOut) {
+        Value res = Value.getUndef();
+        for (Var returnVar : returnVars) {
+            res = cp.meetValue(res, returnOut.get(returnVar));
+        }
+        return res;
+    }
+
+    /**
+     * The Evaluator of expression, here only implements the evaluation of
+     * InstanceFieldAccess, StaticFieldAccess and ArrayAccess.
+     */
+    private class ExpEvaluator implements ExpVisitor<Value> {
+
+        private final CPFact in;
+        private static final Map<Var, Set<Var>> VAR_ALIAS_CACHE = new HashMap<>();
+        private static final Map<StaticFieldAccess, Set<Var>> STATIC_FIELD_ACCESS_CACHE =
+                new HashMap<>();
+        private final PointerAnalysisResult pta;
+
+        private ExpEvaluator(CPFact in, PointerAnalysisResult pta) {
+            this.in = in;
+            this.pta = pta;
+        }
+
+        /** @return the value of the instance field access base.field. */
+        @Override
+        public Value visit(InstanceFieldAccess instanceFieldAccess) {
+            Value res = Value.getUndef();
+
+            Var base = instanceFieldAccess.getBase();
+            JField field = instanceFieldAccess.getFieldRef().resolve();
+
+            for (Var alias : getAliasesOf(base)) {
+                res = cp.meetValue(res,
+                        meetValueOfVars(getVarsStoredIn(alias, field), in));
+            }
+
+            return res;
+        }
+
+        /** @return the meet value of given vars, the value of each var is stored in the in fact. */
+        private Value meetValueOfVars(Set<Var> vars, CPFact in) {
+            Value res = Value.getUndef();
+            for (Var var : vars) {
+                res = cp.meetValue(res, in.get(var));
+            }
+            return res;
+        }
+
+        /** @return all variables `a` where base.field = a. */
+        private Set<Var> getVarsStoredIn(Var base, JField field) {
+            HashSet<Var> storedVars = new HashSet<>();
+
+            for (StoreField storeField : base.getStoreFields()) {
+                if (storeField.getFieldRef().resolve().equals(field)) {
+                    storedVars.add(storeField.getRValue());
+                }
+            }
+
+            return storedVars;
+        }
+
+        /** @return all aliases of given var including itself from the alias cache. */
+        private Set<Var> getAliasesOf(Var var) {
+            Set<Var> aliases = VAR_ALIAS_CACHE.get(var);
+
+            if (aliases == null) {
+                aliases = findAliasesOf(var);
+                VAR_ALIAS_CACHE.put(var, aliases);
+            }
+
+            return aliases;
+        }
+
+        /** @return all aliases of given base including itself from the pointer analysis result. */
+        private Set<Var> findAliasesOf(Var base) {
+            HashSet<Var> aliases = new HashSet<>();
+            Set<Obj> ptsOfBase = pta.getPointsToSet(base);
+
+            for (Var var : pta.getVars()) {
+                if (!Collections.disjoint(ptsOfBase, pta.getPointsToSet(var))) {
+                    aliases.add(var);
+                }
+            }
+
+            return aliases;
+        }
+
+        @Override
+        public Value visit(StaticFieldAccess staticFieldAccess) {
+            return null;
+        }
+
+        @Override
+        public Value visit(ArrayAccess arrayAccess) {
+            //TODO: finish evaluation of array access.
+            return null;
+        }
     }
 }

@@ -123,9 +123,6 @@ class Solver {
             this.context = csMethod.getContext();
         }
 
-        // TODO - if you choose to implement addReachable()
-        //  via visitor pattern, then finish me
-
         /** Process the new statement, add (var, pts) to WL */
         public Void visit(New newStmt) {
             // the context of variables are always the context of the methods.
