@@ -52,12 +52,15 @@ public class InterConstantPropagation extends
     public static final String ID = "inter-constprop";
 
     private final ConstantPropagation cp;
+    private ExpEvaluator expEvaluator = null;
+    private final Map<Var, Set<Var>> varAliasCache;
 
     private PointerAnalysisResult pta;
 
     public InterConstantPropagation(AnalysisConfig config) {
         super(config);
         cp = new ConstantPropagation(new AnalysisConfig(ConstantPropagation.ID));
+        varAliasCache = new HashMap<>();
     }
 
     @Override
@@ -65,6 +68,7 @@ public class InterConstantPropagation extends
         String ptaId = getOptions().getString("pta");
         pta = World.get().getResult(ptaId);
         // You can do initialization work here
+        expEvaluator = new ExpEvaluator();
     }
 
     @Override
@@ -105,26 +109,44 @@ public class InterConstantPropagation extends
      */
     @Override
     protected boolean transferNonCallNode(Stmt stmt, CPFact in, CPFact out) {
+        boolean changed;
         if (stmt instanceof LoadField loadField) {
-            return transferLoadField(loadField, in, out);
+            changed = transferLoadField(loadField, in, out);
         } else if (stmt instanceof LoadArray loadArray) {
-            return transferLoadArray(loadArray, in, out);
+            changed = transferLoadArray(loadArray, in, out);
         } else {
-            return cp.transferNode(stmt, in, out);
+            changed = cp.transferNode(stmt, in, out);
+            if (changed && stmt instanceof StoreField storeField) {
+                appendRelevantLoadFieldsToWL(storeField);
+            }
+        }
+        return changed;
+    }
+
+    /**
+     * Append relevant LoadFields to WL.
+     * e.g. if stmt is `x.f = a`, append `y = x.f` to WL
+     *
+     * @param storeField a StoreField: x.f = a
+     */
+    private void appendRelevantLoadFieldsToWL(StoreField storeField) {
+        if (storeField.getFieldAccess() instanceof InstanceFieldAccess instanceFieldAccess) {
+            solver.appendAbsentNodesInWL(getLoadFieldOfAliasOf(instanceFieldAccess.getBase(),
+                    instanceFieldAccess.getFieldRef().resolve()));
         }
     }
 
     /** @return true if out fact is changed, otherwise false. */
     private boolean transferLoadField(LoadField loadField, CPFact in, CPFact out) {
         in.update(loadField.getLValue(),
-                loadField.getRValue().accept(new ExpEvaluator(in, pta)));
+                loadField.getRValue().accept(expEvaluator));
         return out.copyFrom(in);
     }
 
     /** @return true if out fact is changed, otherwise false. */
     private boolean transferLoadArray(LoadArray loadArray, CPFact in, CPFact out) {
         in.update(loadArray.getLValue(),
-                loadArray.getRValue().accept(new ExpEvaluator(in, pta)));
+                loadArray.getRValue().accept(expEvaluator));
         return out.copyFrom(in);
     }
 
@@ -210,22 +232,71 @@ public class InterConstantPropagation extends
         return res;
     }
 
+    /** @return all StoreFields and the lValue is the given var.field. (var.field = x) */
+    private Collection<StoreField> getAllStoreFieldsOf(Var var, JField field) {
+        Set<StoreField> storeFields = new HashSet<>();
+        for (StoreField storeField : var.getStoreFields()) {
+            if (storeField.getFieldRef().resolve().equals(field)) {
+                storeFields.add(storeField);
+            }
+        }
+        return storeFields;
+    }
+
+    /**
+     * @return all loadFields whose base var is the alias of given var and the field is specific
+     * field.
+     */
+    private Collection<Stmt> getLoadFieldOfAliasOf(Var var, JField field) {
+        Collection<Stmt> loadFields = new HashSet<>();
+        for (Var alias : getAliasesOf(var)) {
+            loadFields.addAll(getAllLoadFieldOf(alias, field));
+        }
+        return loadFields;
+    }
+
+    /** @return all LoadFields and the lValue is the given var.field. (x = var.field) */
+    private Set<LoadField> getAllLoadFieldOf(Var var, JField field) {
+        Set<LoadField> loadFields = new HashSet<>();
+        for (LoadField loadField : var.getLoadFields()) {
+            if (loadField.getFieldRef().resolve().equals(field)) {
+                loadFields.add(loadField);
+            }
+        }
+        return loadFields;
+    }
+
+    /** @return all aliases of given var including itself from the alias cache. */
+    private Set<Var> getAliasesOf(Var var) {
+        Set<Var> aliases = varAliasCache.get(var);
+
+        if (aliases == null) {
+            aliases = findAliasesOf(var);
+            varAliasCache.put(var, aliases);
+        }
+
+        return aliases;
+    }
+
+    /** @return all aliases of given base including itself from the pointer analysis result. */
+    private Set<Var> findAliasesOf(Var base) {
+        HashSet<Var> aliases = new HashSet<>();
+        Set<Obj> ptsOfBase = pta.getPointsToSet(base);
+
+        for (Var var : pta.getVars()) {
+            if (!Collections.disjoint(ptsOfBase, pta.getPointsToSet(var))) {
+                aliases.add(var);
+            }
+        }
+
+        return aliases;
+    }
+
     /**
      * The Evaluator of expression, here only implements the evaluation of
      * InstanceFieldAccess, StaticFieldAccess and ArrayAccess.
      */
     private class ExpEvaluator implements ExpVisitor<Value> {
-
-        private final CPFact in;
-        private static final Map<Var, Set<Var>> VAR_ALIAS_CACHE = new HashMap<>();
-        private static final Map<StaticFieldAccess, Set<Var>> STATIC_FIELD_ACCESS_CACHE =
-                new HashMap<>();
-        private final PointerAnalysisResult pta;
-
-        private ExpEvaluator(CPFact in, PointerAnalysisResult pta) {
-            this.in = in;
-            this.pta = pta;
-        }
 
         /** @return the value of the instance field access base.field. */
         @Override
@@ -237,58 +308,20 @@ public class InterConstantPropagation extends
 
             for (Var alias : getAliasesOf(base)) {
                 res = cp.meetValue(res,
-                        meetValueOfVars(getVarsStoredIn(alias, field), in));
+                        meetRValueOf(getAllStoreFieldsOf(alias, field)));
             }
 
             return res;
         }
 
-        /** @return the meet value of given vars, the value of each var is stored in the in fact. */
-        private Value meetValueOfVars(Set<Var> vars, CPFact in) {
+        /** @return the meet value of rValue of all storeFields. */
+        private Value meetRValueOf(Collection<StoreField> storeFields) {
             Value res = Value.getUndef();
-            for (Var var : vars) {
-                res = cp.meetValue(res, in.get(var));
+            for (StoreField storeField : storeFields) {
+                Value valueOfRVar = solver.getOutFactOf(storeField).get(storeField.getRValue());
+                res = cp.meetValue(res, valueOfRVar);
             }
             return res;
-        }
-
-        /** @return all variables `a` where base.field = a. */
-        private Set<Var> getVarsStoredIn(Var base, JField field) {
-            HashSet<Var> storedVars = new HashSet<>();
-
-            for (StoreField storeField : base.getStoreFields()) {
-                if (storeField.getFieldRef().resolve().equals(field)) {
-                    storedVars.add(storeField.getRValue());
-                }
-            }
-
-            return storedVars;
-        }
-
-        /** @return all aliases of given var including itself from the alias cache. */
-        private Set<Var> getAliasesOf(Var var) {
-            Set<Var> aliases = VAR_ALIAS_CACHE.get(var);
-
-            if (aliases == null) {
-                aliases = findAliasesOf(var);
-                VAR_ALIAS_CACHE.put(var, aliases);
-            }
-
-            return aliases;
-        }
-
-        /** @return all aliases of given base including itself from the pointer analysis result. */
-        private Set<Var> findAliasesOf(Var base) {
-            HashSet<Var> aliases = new HashSet<>();
-            Set<Obj> ptsOfBase = pta.getPointsToSet(base);
-
-            for (Var var : pta.getVars()) {
-                if (!Collections.disjoint(ptsOfBase, pta.getPointsToSet(var))) {
-                    aliases.add(var);
-                }
-            }
-
-            return aliases;
         }
 
         @Override

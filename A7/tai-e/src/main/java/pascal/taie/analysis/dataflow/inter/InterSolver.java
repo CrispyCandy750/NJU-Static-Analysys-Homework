@@ -28,6 +28,7 @@ import pascal.taie.analysis.graph.icfg.ICFG;
 import pascal.taie.analysis.graph.icfg.ICFGEdge;
 import pascal.taie.util.collection.SetQueue;
 
+import java.util.Collection;
 import java.util.LinkedList;
 import java.util.Queue;
 import java.util.Set;
@@ -81,7 +82,7 @@ class InterSolver<Method, Node, Fact> {
         while (!workList.isEmpty()) {
             Node node = workList.poll();
             if (analysis.transferNode(node, calInFact(node), result.getOutFact(node))) {
-                appendAllSuccsToWL(node);
+                appendAbsentNodesInWL(icfg.getSuccsOf(node)); // append successors
             }
         }
     }
@@ -96,12 +97,17 @@ class InterSolver<Method, Node, Fact> {
         return inFact;
     }
 
-    /** Append all successors to work list, ignoring the existing successor. */
-    private void appendAllSuccsToWL(Node node) {
-        for (Node successor : icfg.getSuccsOf(node)) {
-            if (!workList.contains(successor)) {
-                workList.add(successor);
+    /** Append all nodes to workList, ignoring the existing nodes. */
+    public void appendAbsentNodesInWL(Collection<Node> nodes) {
+        for (Node node : nodes) {
+            if (!workList.contains(node)) {
+                workList.add(node);
             }
         }
+    }
+
+    /** @return the out fact of given node. */
+    public Fact getOutFactOf(Node node) {
+        return result.getOutFact(node);
     }
 }
