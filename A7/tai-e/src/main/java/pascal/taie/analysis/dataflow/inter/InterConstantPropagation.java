@@ -42,6 +42,7 @@ import pascal.taie.ir.stmt.*;
 import pascal.taie.language.classes.JField;
 import pascal.taie.language.classes.JMethod;
 import pascal.taie.util.AnalysisException;
+import soot.baf.Inst;
 
 import java.util.*;
 
@@ -112,22 +113,6 @@ public class InterConstantPropagation extends
      *
      * @return true if out fact is changed, otherwise false.
      */
-    /*@Override
-    protected boolean transferNonCallNode(Stmt stmt, CPFact in, CPFact out) {
-        boolean changed = applyTransferFunction(stmt, in, out);
-        if (stmt instanceof LoadField loadField) { // a = x.f, a = T.f
-            changed = transferLoadField(loadField, in, out);
-
-        } else if (stmt instanceof LoadArray loadArray) {
-            changed = transferLoadArray(loadArray, in, out);
-        } else {
-            changed = cp.transferNode(stmt, in, out);
-            if (changed && stmt instanceof StoreField storeField) {
-                appendRelevantLoadFieldsToWL(storeField);
-            }
-        }
-        return changed;
-    }*/
     @Override
     protected boolean transferNonCallNode(Stmt stmt, CPFact in, CPFact out) {
         boolean changed = applyTransferFunction(stmt, in, out);
@@ -421,7 +406,7 @@ public class InterConstantPropagation extends
     private class LoadStoreStmtRecorder {
         private final Map<Var, Set<Var>> aliasCache;
         private final Map<InstanceFieldAccess, Set<StoreField>> storeFieldsOfInstanceFieldAccess;
-        private final Map<InstanceFieldAccess, Set<LoadField>> loadFieldsOfInstanceFieldAccess;
+        private final Map<InstanceFieldAccess, Set<Stmt>> loadFieldsOfInstanceFieldAccess;
         private final Map<FieldRef, Set<StoreField>> storeFieldsOfStaticFieldAccess;
         private final Map<FieldRef, Set<Stmt>> loadFieldsOfStaticFieldAccess;
         private final Map<ArrayAccess, Set<StoreArray>> storeArraysOfArrayAccess;
@@ -437,6 +422,42 @@ public class InterConstantPropagation extends
             loadArraysOfArrayAccess = new HashMap<>();
         }
 
+        /** @return all aliases of given var including itself from the alias cache. */
+        private Set<Var> getAliasesOf(Var var) {
+            Set<Var> aliases = aliasCache.get(var);
+
+            if (aliases == null) {
+                aliases = findAliasesOf(var);
+                aliasCache.put(var, aliases);
+            }
+
+            return aliases;
+        }
+
+        /** @return all aliases of given base including itself from the pointer analysis result. */
+        private Set<Var> findAliasesOf(Var base) {
+            HashSet<Var> aliases = new HashSet<>();
+            Set<Obj> ptsOfBase = pta.getPointsToSet(base);
+
+            for (Var var : pta.getVars()) {
+                if (!Collections.disjoint(ptsOfBase, pta.getPointsToSet(var))) {
+                    aliases.add(var);
+                }
+            }
+
+            return aliases;
+        }
+
+        /** @return the related load fields of given key(x.f): a = x.f. */
+        Set<Stmt> getLoadFields(InstanceFieldAccess key) {
+            return get(loadFieldsOfInstanceFieldAccess, key);
+        }
+
+        /** @return the related store fields of given key(x.f): x.f = b. */
+        Set<StoreField> getStoreFields(InstanceFieldAccess key) {
+            return get(storeFieldsOfInstanceFieldAccess, key);
+        }
+
         /** @return the related load fields of given key(T.f): a = T.f. */
         Set<Stmt> getLoadFields(StaticFieldAccess key) {
             return get(loadFieldsOfStaticFieldAccess, key.getFieldRef());
@@ -447,14 +468,23 @@ public class InterConstantPropagation extends
             return get(storeFieldsOfStaticFieldAccess, key.getFieldRef());
         }
 
-        /** Record the given loadField. */
+        /** Record the given static loadField. */
         boolean put(StaticFieldAccess staticFieldAccess, LoadField loadField) {
             return put(loadFieldsOfStaticFieldAccess, staticFieldAccess.getFieldRef(), loadField);
         }
 
-        /** Record the given storeField. */
+        /** Record the given static storeField. */
         boolean put(StaticFieldAccess staticFieldAccess, StoreField storeField) {
             return put(storeFieldsOfStaticFieldAccess, staticFieldAccess.getFieldRef(), storeField);
+        }
+
+        /** Record the given instance loadField */
+        boolean put(InstanceFieldAccess instanceFieldAccess, LoadField loadField) {
+            return false;
+        }
+
+        boolean put(InstanceFieldAccess instanceFieldAccess, StoreField storeField) {
+            return false;
         }
 
         /**
@@ -464,7 +494,7 @@ public class InterConstantPropagation extends
         private <K, V> boolean put(Map<K, Set<V>> map, K key, V value) {
             Set<V> set = map.get(key);
             if (set == null) {
-                map.put(key, Set.of(value));
+                map.put(key, new HashSet<>(Set.of(value)));
                 return true;
             } else {
                 return set.add(value);
