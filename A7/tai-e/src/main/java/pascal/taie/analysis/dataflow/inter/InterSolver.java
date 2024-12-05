@@ -82,7 +82,9 @@ class InterSolver<Method, Node, Fact> {
         while (!workList.isEmpty()) {
             Node node = workList.poll();
             if (analysis.transferNode(node, calInFact(node), result.getOutFact(node))) {
-                appendAbsentNodesInWL(icfg.getSuccsOf(node)); // append successors
+                for (Node succ : icfg.getSuccsOf(node)) { // append successors
+                    appendAbsentNodeInWL(succ);
+                }
             }
         }
     }
@@ -97,12 +99,10 @@ class InterSolver<Method, Node, Fact> {
         return inFact;
     }
 
-    /** Append all nodes to workList, ignoring the existing nodes. */
-    public void appendAbsentNodesInWL(Collection<Node> nodes) {
-        for (Node node : nodes) {
-            if (!workList.contains(node)) {
-                workList.add(node);
-            }
+    /** Append given node to workList, ignoring the existing nodes. */
+    public void appendAbsentNodeInWL(Node node) {
+        if (!workList.contains(node)) {
+            workList.add(node);
         }
     }
 
