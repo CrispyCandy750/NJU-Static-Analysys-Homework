@@ -32,10 +32,12 @@ import pascal.taie.analysis.graph.icfg.CallToReturnEdge;
 import pascal.taie.analysis.graph.icfg.NormalEdge;
 import pascal.taie.analysis.graph.icfg.ReturnEdge;
 import pascal.taie.analysis.pta.PointerAnalysisResult;
+import pascal.taie.analysis.pta.core.cs.element.StaticField;
 import pascal.taie.analysis.pta.core.heap.Obj;
 import pascal.taie.config.AnalysisConfig;
 import pascal.taie.ir.IR;
 import pascal.taie.ir.exp.*;
+import pascal.taie.ir.proginfo.FieldRef;
 import pascal.taie.ir.stmt.*;
 import pascal.taie.language.classes.JField;
 import pascal.taie.language.classes.JMethod;
@@ -52,8 +54,9 @@ public class InterConstantPropagation extends
     public static final String ID = "inter-constprop";
 
     private final ConstantPropagation cp;
-    private ExpEvaluator expEvaluator = null;
+    private ExpEvaluator expEvaluator;
     private final Map<Var, Set<Var>> varAliasCache;
+    private final LoadStoreStmtRecorder loadStoreStmtRecorder;
 
     private PointerAnalysisResult pta;
 
@@ -61,6 +64,7 @@ public class InterConstantPropagation extends
         super(config);
         cp = new ConstantPropagation(new AnalysisConfig(ConstantPropagation.ID));
         varAliasCache = new HashMap<>();
+        loadStoreStmtRecorder = new LoadStoreStmtRecorder();
     }
 
     @Override
@@ -103,15 +107,17 @@ public class InterConstantPropagation extends
     }
 
     /**
-     * Non Call Node (may) apply transfer function to in fact.
+     * Non Call Node (may) apply transfer function to in fact, records some stmt and append stmt
+     * to workList.
      *
      * @return true if out fact is changed, otherwise false.
      */
-    @Override
+    /*@Override
     protected boolean transferNonCallNode(Stmt stmt, CPFact in, CPFact out) {
-        boolean changed;
-        if (stmt instanceof LoadField loadField) {
+        boolean changed = applyTransferFunction(stmt, in, out);
+        if (stmt instanceof LoadField loadField) { // a = x.f, a = T.f
             changed = transferLoadField(loadField, in, out);
+
         } else if (stmt instanceof LoadArray loadArray) {
             changed = transferLoadArray(loadArray, in, out);
         } else {
@@ -121,6 +127,76 @@ public class InterConstantPropagation extends
             }
         }
         return changed;
+    }*/
+    @Override
+    protected boolean transferNonCallNode(Stmt stmt, CPFact in, CPFact out) {
+        boolean changed = applyTransferFunction(stmt, in, out);
+        recordStaticFieldAccessStmt(stmt);
+        appendRelatedStmtToWL(changed, stmt);
+        return changed;
+    }
+
+    private StaticFieldAccess loadStaticFieldAccess = null;
+    private LoadField staticLoadField = null;
+    private StaticFieldAccess storeStaticFieldAccess = null;
+    private StoreField staticStoreField = null;
+
+    /** Just for test the equal() of static field access */
+    private void testStaticField(Stmt stmt) {
+        if (stmt instanceof LoadField loadField && loadField.isStatic()) {
+            loadStaticFieldAccess = (StaticFieldAccess) loadField.getFieldAccess();
+            staticLoadField = loadField;
+        } else if (stmt instanceof StoreField storeField && storeField.isStatic()) {
+            storeStaticFieldAccess = (StaticFieldAccess) storeField.getFieldAccess();
+            staticStoreField = storeField;
+        }
+
+        if (loadStaticFieldAccess != null && staticLoadField != null
+                && storeStaticFieldAccess != null && staticStoreField != null) {
+            System.out.println(
+                    "=============================================================================");
+            System.out.println(staticLoadField + "|||" + loadStaticFieldAccess);
+            System.out.println(staticStoreField + "|||" + storeStaticFieldAccess);
+
+
+            System.exit(0);
+        }
+    }
+
+    /**
+     * Apply transfer function to in fact.
+     *
+     * @return true if the out fact is changed, otherwise false.
+     */
+    private boolean applyTransferFunction(Stmt stmt, CPFact in, CPFact out) {
+        if (stmt instanceof LoadField loadField) { // a = x.f, a = T.f
+            return transferLoadField(loadField, in, out);
+        } else if (stmt instanceof LoadArray loadArray) {
+            return transferLoadArray(loadArray, in, out);
+        } else {
+            return cp.transferNode(stmt, in, out);
+        }
+    }
+
+    /** Record the StaticLoad and StaticStore stmts. */
+    private void recordStaticFieldAccessStmt(Stmt stmt) {
+        if (stmt instanceof LoadField loadField && loadField.isStatic()) {
+            loadStoreStmtRecorder.put((StaticFieldAccess) loadField.getRValue(), loadField);
+        } else if (stmt instanceof StoreField storeField && storeField.isStatic()) {
+            loadStoreStmtRecorder.put((StaticFieldAccess) storeField.getFieldAccess(),
+                    storeField);
+        }
+    }
+
+    /**
+     * Append related Stmts to WL
+     *
+     * @param append do append if true, do nothing if false
+     */
+    private void appendRelatedStmtToWL(boolean append, Stmt stmt) {
+        if (append && stmt instanceof StoreField storeField) {
+            appendRelevantLoadFieldsToWL(storeField);
+        }
     }
 
     /**
@@ -133,6 +209,9 @@ public class InterConstantPropagation extends
         if (storeField.getFieldAccess() instanceof InstanceFieldAccess instanceFieldAccess) {
             solver.appendAbsentNodesInWL(getLoadFieldOfAliasOf(instanceFieldAccess.getBase(),
                     instanceFieldAccess.getFieldRef().resolve()));
+        } else if (storeField.getFieldAccess() instanceof StaticFieldAccess staticFieldAccess) {
+            solver.appendAbsentNodesInWL(
+                    loadStoreStmtRecorder.getLoadFields(staticFieldAccess));
         }
     }
 
@@ -324,15 +403,76 @@ public class InterConstantPropagation extends
             return res;
         }
 
+        /** @return the value of the static field access T.f. */
         @Override
         public Value visit(StaticFieldAccess staticFieldAccess) {
-            return null;
+            return meetRValueOf(
+                    loadStoreStmtRecorder.getStoreFields(staticFieldAccess));
         }
 
         @Override
         public Value visit(ArrayAccess arrayAccess) {
             //TODO: finish evaluation of array access.
             return null;
+        }
+    }
+
+    /** The class records the relevant StoreFields, LoadFields, StoreArrays, LoadArrays. */
+    private class LoadStoreStmtRecorder {
+        private final Map<Var, Set<Var>> aliasCache;
+        private final Map<InstanceFieldAccess, Set<StoreField>> storeFieldsOfInstanceFieldAccess;
+        private final Map<InstanceFieldAccess, Set<LoadField>> loadFieldsOfInstanceFieldAccess;
+        private final Map<FieldRef, Set<StoreField>> storeFieldsOfStaticFieldAccess;
+        private final Map<FieldRef, Set<Stmt>> loadFieldsOfStaticFieldAccess;
+        private final Map<ArrayAccess, Set<StoreArray>> storeArraysOfArrayAccess;
+        private final Map<ArrayAccess, Set<LoadArray>> loadArraysOfArrayAccess;
+
+        LoadStoreStmtRecorder() {
+            aliasCache = new HashMap<>();
+            storeFieldsOfInstanceFieldAccess = new HashMap<>();
+            loadFieldsOfInstanceFieldAccess = new HashMap<>();
+            storeFieldsOfStaticFieldAccess = new HashMap<>();
+            loadFieldsOfStaticFieldAccess = new HashMap<>();
+            storeArraysOfArrayAccess = new HashMap<>();
+            loadArraysOfArrayAccess = new HashMap<>();
+        }
+
+        /** @return the related load fields of given key(T.f): a = T.f. */
+        Set<Stmt> getLoadFields(StaticFieldAccess key) {
+            return get(loadFieldsOfStaticFieldAccess, key.getFieldRef());
+        }
+
+        /** @return the related store fields of given key(T.f): T.f = b. */
+        Set<StoreField> getStoreFields(StaticFieldAccess key) {
+            return get(storeFieldsOfStaticFieldAccess, key.getFieldRef());
+        }
+
+        /** Record the given loadField. */
+        boolean put(StaticFieldAccess staticFieldAccess, LoadField loadField) {
+            return put(loadFieldsOfStaticFieldAccess, staticFieldAccess.getFieldRef(), loadField);
+        }
+
+        /** Record the given storeField. */
+        boolean put(StaticFieldAccess staticFieldAccess, StoreField storeField) {
+            return put(storeFieldsOfStaticFieldAccess, staticFieldAccess.getFieldRef(), storeField);
+        }
+
+        /**
+         * add the value in the set corresponding to the key, if the set is non-existing,
+         * creates a new set.
+         */
+        private <K, V> boolean put(Map<K, Set<V>> map, K key, V value) {
+            Set<V> set = map.get(key);
+            if (set == null) {
+                map.put(key, Set.of(value));
+                return true;
+            } else {
+                return set.add(value);
+            }
+        }
+
+        private <K, V> Set<V> get(Map<K, Set<V>> map, K key) {
+            return map.getOrDefault(key, new HashSet<>());
         }
     }
 }
