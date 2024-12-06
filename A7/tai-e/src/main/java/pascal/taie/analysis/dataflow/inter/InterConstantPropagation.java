@@ -40,7 +40,6 @@ import pascal.taie.ir.proginfo.FieldRef;
 import pascal.taie.ir.stmt.*;
 import pascal.taie.language.classes.JMethod;
 import pascal.taie.util.AnalysisException;
-import pascal.taie.util.Indexable;
 
 import java.util.*;
 import java.util.function.Function;
@@ -54,7 +53,7 @@ public class InterConstantPropagation extends
     public static final String ID = "inter-constprop";
 
     private final ConstantPropagation cp;
-    private ExpEvaluator expEvaluator;
+    private FieldAccessEvaluator fieldAccessEvaluator;
     private final LoadStoreStmtCache loadStoreStmtCache;
 
     private PointerAnalysisResult pta;
@@ -70,7 +69,7 @@ public class InterConstantPropagation extends
         String ptaId = getOptions().getString("pta");
         pta = World.get().getResult(ptaId);
         // You can do initialization work here
-        expEvaluator = new ExpEvaluator();
+        fieldAccessEvaluator = new FieldAccessEvaluator();
     }
 
     @Override
@@ -187,7 +186,7 @@ public class InterConstantPropagation extends
     /** @return true if out fact is changed, otherwise false. */
     private boolean transferLoadField(LoadField loadField, CPFact in, CPFact out) {
         in.update(loadField.getLValue(),
-                loadField.getRValue().accept(expEvaluator));
+                loadField.getRValue().accept(fieldAccessEvaluator));
         return out.copyFrom(in);
     }
 
@@ -284,7 +283,7 @@ public class InterConstantPropagation extends
      * The Evaluator of expression, here only implements the evaluation of
      * InstanceFieldAccess, StaticFieldAccess and ArrayAccess.
      */
-    private class ExpEvaluator implements ExpVisitor<Value> {
+    private class FieldAccessEvaluator implements ExpVisitor<Value> {
 
         /** @return the value of the instance field access base.field. */
         @Override
@@ -297,15 +296,6 @@ public class InterConstantPropagation extends
         public Value visit(StaticFieldAccess staticFieldAccess) {
             return meetRValueOf(loadStoreStmtCache.getStoreFields(staticFieldAccess));
         }
-
-        /*@Override
-        public Value visit(ArrayAccess arrayAccess) {
-            if (arrayIndexValue == null) {
-                throw new AnalysisException(
-                        "the index of the arrayAccess " + arrayAccess + " is null!");
-            }
-            return ExpVisitor.super.visit(arrayAccess);
-        }*/
 
         /** @return the meet value of rValue of all assignStmts. */
         private <T extends AssignStmt<?, Var>> Value meetRValueOf(Collection<T> assignStmts) {
@@ -388,8 +378,6 @@ public class InterConstantPropagation extends
         private final Map<InstanceFieldAccess, Set<LoadField>> loadFieldsOfInstanceFieldAccess;
         private final Map<FieldRef, Set<StoreField>> storeFieldsOfStaticFieldAccess;
         private final Map<FieldRef, Set<LoadField>> loadFieldsOfStaticFieldAccess;
-        //        private final Map<ArrayIndexAccess, Set<StoreArray>> storeArraysOfArrayAccess;
-        //        private final Map<ArrayIndexAccess, Set<LoadArray>> loadArraysOfArrayAccess;
 
         /** The key of storeArray and loadArray is the base of array access. */
         private final Map<Var, Set<StoreArray>> storeArraysOfArrayAccess;
@@ -471,6 +459,12 @@ public class InterConstantPropagation extends
             return findInstanceLoadOrStoreFields(instanceFieldAccess, Var::getStoreFields);
         }
 
+        /**
+         * @param instanceFieldAccess the instance field access a.f
+         * @param getLoadOrStoreFieldsOf Var::getLoadFields or Var::getStoreFields
+         * @param <T> LoadField or StoreField
+         * @return all LoadFields or StoreFields of all aliases
+         */
         private <T extends FieldStmt> Set<T> findInstanceLoadOrStoreFields(
                 InstanceFieldAccess instanceFieldAccess,
                 Function<Var, List<T>> getLoadOrStoreFieldsOf
@@ -493,12 +487,12 @@ public class InterConstantPropagation extends
 
         /** @return the related load fields of given key(T.f): a = T.f. */
         Set<LoadField> getLoadFields(StaticFieldAccess key) {
-            return get(loadFieldsOfStaticFieldAccess, key.getFieldRef());
+            return getStaticFields(loadFieldsOfStaticFieldAccess, key.getFieldRef());
         }
 
         /** @return the related store fields of given key(T.f): T.f = b. */
         Set<StoreField> getStoreFields(StaticFieldAccess key) {
-            return get(storeFieldsOfStaticFieldAccess, key.getFieldRef());
+            return getStaticFields(storeFieldsOfStaticFieldAccess, key.getFieldRef());
         }
 
         /** Record the given static loadField. */
@@ -525,7 +519,7 @@ public class InterConstantPropagation extends
             }
         }
 
-        private <K, V> Set<V> get(Map<K, Set<V>> map, K key) {
+        private <K, V> Set<V> getStaticFields(Map<K, Set<V>> map, K key) {
             return map.getOrDefault(key, new HashSet<>());
         }
 
@@ -551,87 +545,20 @@ public class InterConstantPropagation extends
             return findLoadOrStoreArrays(base, Var::getLoadArrays);
         }
 
+        /**
+         * @param base The base var of arrayAccess, e.g. the base of a[i] is a
+         * @param aliasStmtsGetter getLoadArrays of getStoreArrays
+         * @param <T> LoadArray or StoreArray
+         * @return all loadArrays or storeArrays of all aliases
+         */
         private <T extends Stmt> Set<T> findLoadOrStoreArrays(Var base,
                 Function<Var, List<T>> aliasStmtsGetter
         ) {
             Set<T> loadOrStoreArrays = new HashSet<>();
-            //            Var base = arrayIndexAccess.getBase();
-            //            Value index = arrayIndexAccess.getIndex();
-
-            /*for (Var alias : getAliasesOf(base)) {
-                for (T stmt : aliasStmtsGetter.apply(alias)) {
-                    ArrayIndexAccess possibleAlias = makeArrayIndexAccess(stmt);
-                    if (indexMeetAlias(index, possibleAlias.getIndex())) {
-                        loadOrStoreArrays.add(stmt);
-                    }
-                }
-            }*/
-
             for (Var alias : getAliasesOf(base)) {
                 loadOrStoreArrays.addAll(aliasStmtsGetter.apply(alias));
             }
-
             return loadOrStoreArrays;
         }
-
-        /*private ArrayIndexAccess makeArrayIndexAccess(Stmt stmt) {
-            if (stmt instanceof LoadArray loadArray) {
-                return new ArrayIndexAccess(loadArray);
-            } else if (stmt instanceof StoreArray storeArray) {
-                return new ArrayIndexAccess(storeArray);
-            } else {
-                throw new AnalysisException(
-                        "The stmt " + stmt + " is not LoadArray or StoreArray!");
-            }
-        }*/
-    }
-
-    /** Represents an ArrayAccess with specific index value. */
-    private class ArrayIndexAccess {
-        private final Var base;
-        private final Value index;
-
-        @Override
-        public boolean equals(Object o) {
-            if (this == o) return true;
-            if (o == null || getClass() != o.getClass()) return false;
-            ArrayIndexAccess that = (ArrayIndexAccess) o;
-            return Objects.equals(base, that.base) && Objects.equals(index, that.index);
-        }
-
-        @Override
-        public int hashCode() {
-            return Objects.hash(base, index);
-        }
-
-        @Override
-        public String toString() {
-            return base + "[" + index + "]";
-        }
-
-        ArrayIndexAccess(StoreArray storeArray) {
-            this(storeArray.getArrayAccess(), storeArray);
-        }
-
-        ArrayIndexAccess(LoadArray loadArray) {
-            this(loadArray.getArrayAccess(), loadArray);
-        }
-
-        private ArrayIndexAccess(ArrayAccess arrayAccess, Stmt stmt) {
-            this.base = arrayAccess.getBase();
-            this.index = solver.getInFactOf(stmt).get(arrayAccess.getIndex());
-        }
-
-        Var getBase() {
-            return base;
-        }
-
-        Value getIndex() {
-            return index;
-        }
-
-        /*public Value accept(ExpEvaluator visitor) {
-            return visitor.visit(this);
-        }*/
     }
 }
