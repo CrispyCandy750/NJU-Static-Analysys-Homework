@@ -40,6 +40,7 @@ import pascal.taie.ir.proginfo.FieldRef;
 import pascal.taie.ir.stmt.*;
 import pascal.taie.language.classes.JMethod;
 import pascal.taie.util.AnalysisException;
+import pascal.taie.util.Indexable;
 
 import java.util.*;
 import java.util.function.Function;
@@ -153,7 +154,7 @@ public class InterConstantPropagation extends
             appendRelevantLoadFieldsToWL(storeField);
         } else if (sourceStmt instanceof StoreArray storeArray) {
             appendAbsentNodesToWL(
-                    loadStoreStmtCache.getLoadArrays(new ArrayIndexAccess(storeArray)));
+                    loadStoreStmtCache.getLoadArrays(storeArray.getArrayAccess()));
         }
     }
 
@@ -193,7 +194,7 @@ public class InterConstantPropagation extends
     /** @return true if out fact is changed, otherwise false. */
     private boolean transferLoadArray(LoadArray loadArray, CPFact in, CPFact out) {
         in.update(loadArray.getLValue(),
-                new ArrayIndexAccess(loadArray).accept(expEvaluator));
+                loadArray.getRValue().accept(new ArrayAccessEvaluator(loadArray)));
         return out.copyFrom(in);
     }
 
@@ -297,11 +298,16 @@ public class InterConstantPropagation extends
             return meetRValueOf(loadStoreStmtCache.getStoreFields(staticFieldAccess));
         }
 
-        public Value visit(ArrayIndexAccess arrayIndexAccess) {
-            return meetRValueOf(loadStoreStmtCache.getStoreArrays(arrayIndexAccess));
-        }
+        /*@Override
+        public Value visit(ArrayAccess arrayAccess) {
+            if (arrayIndexValue == null) {
+                throw new AnalysisException(
+                        "the index of the arrayAccess " + arrayAccess + " is null!");
+            }
+            return ExpVisitor.super.visit(arrayAccess);
+        }*/
 
-        /** @return the meet value of rValue of all storeFields. */
+        /** @return the meet value of rValue of all assignStmts. */
         private <T extends AssignStmt<?, Var>> Value meetRValueOf(Collection<T> assignStmts) {
             Value res = Value.getUndef();
             for (T assignStmt : assignStmts) {
@@ -312,6 +318,69 @@ public class InterConstantPropagation extends
         }
     }
 
+
+    /**
+     * The Evaluator of expression, here only implements the evaluation of
+     * InstanceFieldAccess, StaticFieldAccess and ArrayAccess.
+     */
+    private class ArrayAccessEvaluator implements ExpVisitor<Value> {
+        private final Value arrayIndexValue;
+
+        ArrayAccessEvaluator(LoadArray loadArray) {
+            this.arrayIndexValue = getValueOfArrayIndex(loadArray);
+        }
+
+        ArrayAccessEvaluator(StoreArray storeArray) {
+            this.arrayIndexValue = getValueOfArrayIndex(storeArray);
+        }
+
+        @Override
+        public Value visit(ArrayAccess arrayAccess) {
+            if (arrayIndexValue == null) {
+                throw new AnalysisException(
+                        "the index of the arrayAccess " + arrayAccess + " is null!");
+            }
+            return meetValueStoredIn(loadStoreStmtCache.getStoreArrays(arrayAccess));
+        }
+
+        private Value meetValueStoredIn(Collection<StoreArray> storeArrays) {
+            Value res = Value.getUndef();
+            for (StoreArray storeArray : storeArrays) {
+                if (indexMeetAlias(arrayIndexValue, getValueOfArrayIndex(storeArray))) {
+                    Value valueOfRVar = solver.getInFactOf(storeArray).get(storeArray.getRValue());
+                    res = cp.meetValue(res, valueOfRVar);
+                }
+            }
+            return res;
+        }
+
+        /** @return the value of the index of the arrayAccess of loadArray. */
+        private Value getValueOfArrayIndex(LoadArray loadArray) {
+            return getValueOfArrayIndex(loadArray.getArrayAccess(), loadArray);
+        }
+
+        /** @return the value of the index of the arrayAccess of storeArray. */
+        private Value getValueOfArrayIndex(StoreArray storeArray) {
+            return getValueOfArrayIndex(storeArray.getArrayAccess(), storeArray);
+        }
+
+        /** @return the value of the index of the arrayAccess. */
+        private Value getValueOfArrayIndex(ArrayAccess arrayAccess, Stmt arrayStmt) {
+            return solver.getInFactOf(arrayStmt).get(arrayAccess.getIndex());
+        }
+
+        /** @return true if the index1 and index2 meet the requirement of array access alias. */
+        private boolean indexMeetAlias(Value index1, Value index2) {
+            if (index1.isUndef() || index2.isUndef()) {
+                return false;
+            } else if (index1.isNAC() || index2.isNAC()) {
+                return true;
+            } else {
+                return index1.getConstant() == index2.getConstant();
+            }
+        }
+    }
+
     /** The class caches the relevant StoreFields, LoadFields, StoreArrays, LoadArrays. */
     private class LoadStoreStmtCache {
         private final Map<Var, Set<Var>> aliasCache;
@@ -319,8 +388,12 @@ public class InterConstantPropagation extends
         private final Map<InstanceFieldAccess, Set<LoadField>> loadFieldsOfInstanceFieldAccess;
         private final Map<FieldRef, Set<StoreField>> storeFieldsOfStaticFieldAccess;
         private final Map<FieldRef, Set<LoadField>> loadFieldsOfStaticFieldAccess;
-        private final Map<ArrayIndexAccess, Set<StoreArray>> storeArraysOfArrayAccess;
-        private final Map<ArrayIndexAccess, Set<LoadArray>> loadArraysOfArrayAccess;
+        //        private final Map<ArrayIndexAccess, Set<StoreArray>> storeArraysOfArrayAccess;
+        //        private final Map<ArrayIndexAccess, Set<LoadArray>> loadArraysOfArrayAccess;
+
+        /** The key of storeArray and loadArray is the base of array access. */
+        private final Map<Var, Set<StoreArray>> storeArraysOfArrayAccess;
+        private final Map<Var, Set<LoadArray>> loadArraysOfArrayAccess;
 
         LoadStoreStmtCache() {
             aliasCache = new HashMap<>();
@@ -458,43 +531,50 @@ public class InterConstantPropagation extends
 
         /* ---------------------- Array Access ---------------------- */
 
-        Set<StoreArray> getStoreArrays(ArrayIndexAccess arrayIndexAccess) {
-            return getAndCache(storeArraysOfArrayAccess, arrayIndexAccess, this::findStoreArrays);
+        Set<StoreArray> getStoreArrays(ArrayAccess arrayAccess) {
+            return getAndCache(storeArraysOfArrayAccess, arrayAccess.getBase(),
+                    this::findStoreArrays);
         }
 
-        Set<LoadArray> getLoadArrays(ArrayIndexAccess arrayIndexAccess) {
-            return getAndCache(loadArraysOfArrayAccess, arrayIndexAccess, this::findLoadArrays);
+        Set<LoadArray> getLoadArrays(ArrayAccess arrayAccess) {
+            return getAndCache(loadArraysOfArrayAccess, arrayAccess.getBase(),
+                    this::findLoadArrays);
         }
 
         /** @return all storeArrays of given arrayAccess (a[i]): a[i] = b */
-        private Set<StoreArray> findStoreArrays(ArrayIndexAccess arrayIndexAccess) {
-            return findLoadOrStoreArrays(arrayIndexAccess, Var::getStoreArrays);
+        private Set<StoreArray> findStoreArrays(Var base) {
+            return findLoadOrStoreArrays(base, Var::getStoreArrays);
         }
 
         /** @return all loadArrays of given arrayAccess (a[i]): b = a[i] */
-        private Set<LoadArray> findLoadArrays(ArrayIndexAccess arrayIndexAccess) {
-            return findLoadOrStoreArrays(arrayIndexAccess, Var::getLoadArrays);
+        private Set<LoadArray> findLoadArrays(Var base) {
+            return findLoadOrStoreArrays(base, Var::getLoadArrays);
         }
 
-        private <T extends Stmt> Set<T> findLoadOrStoreArrays(ArrayIndexAccess arrayIndexAccess,
+        private <T extends Stmt> Set<T> findLoadOrStoreArrays(Var base,
                 Function<Var, List<T>> aliasStmtsGetter
         ) {
             Set<T> loadOrStoreArrays = new HashSet<>();
-            Var base = arrayIndexAccess.getBase();
-            Value index = arrayIndexAccess.getIndex();
+            //            Var base = arrayIndexAccess.getBase();
+            //            Value index = arrayIndexAccess.getIndex();
 
-            for (Var alias : getAliasesOf(base)) {
+            /*for (Var alias : getAliasesOf(base)) {
                 for (T stmt : aliasStmtsGetter.apply(alias)) {
                     ArrayIndexAccess possibleAlias = makeArrayIndexAccess(stmt);
                     if (indexMeetAlias(index, possibleAlias.getIndex())) {
                         loadOrStoreArrays.add(stmt);
                     }
                 }
+            }*/
+
+            for (Var alias : getAliasesOf(base)) {
+                loadOrStoreArrays.addAll(aliasStmtsGetter.apply(alias));
             }
+
             return loadOrStoreArrays;
         }
 
-        private ArrayIndexAccess makeArrayIndexAccess(Stmt stmt) {
+        /*private ArrayIndexAccess makeArrayIndexAccess(Stmt stmt) {
             if (stmt instanceof LoadArray loadArray) {
                 return new ArrayIndexAccess(loadArray);
             } else if (stmt instanceof StoreArray storeArray) {
@@ -503,18 +583,7 @@ public class InterConstantPropagation extends
                 throw new AnalysisException(
                         "The stmt " + stmt + " is not LoadArray or StoreArray!");
             }
-        }
-
-        /** @return true if the index1 and index2 meet the requirement of array access alias. */
-        private boolean indexMeetAlias(Value index1, Value index2) {
-            if (index1.isUndef() || index2.isUndef()) {
-                return false;
-            } else if (index1.isNAC() || index2.isNAC()) {
-                return true;
-            } else {
-                return index1.getConstant() == index2.getConstant();
-            }
-        }
+        }*/
     }
 
     /** Represents an ArrayAccess with specific index value. */
@@ -561,8 +630,8 @@ public class InterConstantPropagation extends
             return index;
         }
 
-        public Value accept(ExpEvaluator visitor) {
+        /*public Value accept(ExpEvaluator visitor) {
             return visitor.visit(this);
-        }
+        }*/
     }
 }
