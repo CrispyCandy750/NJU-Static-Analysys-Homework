@@ -54,22 +54,20 @@ public class InterConstantPropagation extends
 
     private final ConstantPropagation cp;
     private final FieldAccessEvaluator fieldAccessEvaluator;
-    private final LoadStoreStmtCache loadStoreStmtCache;
-
-    private PointerAnalysisResult pta;
+    private LoadStoreStmtCache loadStoreStmtCache;
 
     public InterConstantPropagation(AnalysisConfig config) {
         super(config);
         cp = new ConstantPropagation(new AnalysisConfig(ConstantPropagation.ID));
-        loadStoreStmtCache = new LoadStoreStmtCache();
         fieldAccessEvaluator = new FieldAccessEvaluator();
     }
 
     @Override
     protected void initialize() {
         String ptaId = getOptions().getString("pta");
-        pta = World.get().getResult(ptaId);
+        PointerAnalysisResult pta = World.get().getResult(ptaId);
         // You can do initialization work here
+        loadStoreStmtCache = new LoadStoreStmtCache(pta);
     }
 
     @Override
@@ -372,7 +370,8 @@ public class InterConstantPropagation extends
     }
 
     /** The class caches the relevant StoreFields, LoadFields, StoreArrays, LoadArrays. */
-    private class LoadStoreStmtCache {
+    private static class LoadStoreStmtCache {
+        private final PointerAnalysisResult pta;
         private final Map<Var, Set<Var>> aliasCache;
         private final Map<InstanceFieldAccess, Set<StoreField>> storeFieldsOfInstanceFieldAccess;
         private final Map<InstanceFieldAccess, Set<LoadField>> loadFieldsOfInstanceFieldAccess;
@@ -383,7 +382,8 @@ public class InterConstantPropagation extends
         private final Map<Var, Set<StoreArray>> storeArraysOfArrayAccess;
         private final Map<Var, Set<LoadArray>> loadArraysOfArrayAccess;
 
-        LoadStoreStmtCache() {
+        LoadStoreStmtCache(PointerAnalysisResult pta) {
+            this.pta = pta;
             aliasCache = new HashMap<>();
             storeFieldsOfInstanceFieldAccess = new HashMap<>();
             loadFieldsOfInstanceFieldAccess = new HashMap<>();
