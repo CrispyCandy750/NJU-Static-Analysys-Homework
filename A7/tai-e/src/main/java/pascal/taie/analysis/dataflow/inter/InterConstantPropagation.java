@@ -117,33 +117,6 @@ public class InterConstantPropagation extends
         return changed;
     }
 
-    private StaticFieldAccess loadStaticFieldAccess = null;
-    private LoadField staticLoadField = null;
-    private StaticFieldAccess storeStaticFieldAccess = null;
-    private StoreField staticStoreField = null;
-
-    /** Just for test the equal() of static field access */
-    private void testStaticField(Stmt stmt) {
-        if (stmt instanceof LoadField loadField && loadField.isStatic()) {
-            loadStaticFieldAccess = (StaticFieldAccess) loadField.getFieldAccess();
-            staticLoadField = loadField;
-        } else if (stmt instanceof StoreField storeField && storeField.isStatic()) {
-            storeStaticFieldAccess = (StaticFieldAccess) storeField.getFieldAccess();
-            staticStoreField = storeField;
-        }
-
-        if (loadStaticFieldAccess != null && staticLoadField != null
-                && storeStaticFieldAccess != null && staticStoreField != null) {
-            System.out.println(
-                    "=============================================================================");
-            System.out.println(staticLoadField + "|||" + loadStaticFieldAccess);
-            System.out.println(staticStoreField + "|||" + storeStaticFieldAccess);
-
-
-            System.exit(0);
-        }
-    }
-
     /**
      * Apply transfer function to in fact.
      *
@@ -175,8 +148,12 @@ public class InterConstantPropagation extends
      * @param append do append if true, do nothing if false
      */
     private void appendRelatedStmtToWL(boolean append, Stmt sourceStmt) {
-        if (append && sourceStmt instanceof StoreField storeField) {
+        if (!append) {  // return;
+        } else if (sourceStmt instanceof StoreField storeField) {
             appendRelevantLoadFieldsToWL(storeField);
+        } else if (sourceStmt instanceof StoreArray storeArray) {
+            appendAbsentNodesToWL(
+                    loadStoreStmtCache.getLoadArrays(new ArrayIndexAccess(storeArray)));
         }
     }
 
@@ -202,7 +179,7 @@ public class InterConstantPropagation extends
      */
     private <Node extends Stmt> void appendAbsentNodesToWL(Collection<Node> nodes) {
         for (Node node : nodes) {
-            solver.appendAbsentNodeInWL(node);
+            solver.appendNodeToWL(node);
         }
     }
 
@@ -216,7 +193,7 @@ public class InterConstantPropagation extends
     /** @return true if out fact is changed, otherwise false. */
     private boolean transferLoadArray(LoadArray loadArray, CPFact in, CPFact out) {
         in.update(loadArray.getLValue(),
-                loadArray.getRValue().accept(expEvaluator));
+                new ArrayIndexAccess(loadArray).accept(expEvaluator));
         return out.copyFrom(in);
     }
 
@@ -320,17 +297,15 @@ public class InterConstantPropagation extends
             return meetRValueOf(loadStoreStmtCache.getStoreFields(staticFieldAccess));
         }
 
-        @Override
-        public Value visit(ArrayAccess arrayAccess) {
-            //TODO: finish evaluation of array access.
-            return null;
+        public Value visit(ArrayIndexAccess arrayIndexAccess) {
+            return meetRValueOf(loadStoreStmtCache.getStoreArrays(arrayIndexAccess));
         }
 
         /** @return the meet value of rValue of all storeFields. */
-        private Value meetRValueOf(Collection<StoreField> storeFields) {
+        private <T extends AssignStmt<?, Var>> Value meetRValueOf(Collection<T> assignStmts) {
             Value res = Value.getUndef();
-            for (StoreField storeField : storeFields) {
-                Value valueOfRVar = solver.getOutFactOf(storeField).get(storeField.getRValue());
+            for (T assignStmt : assignStmts) {
+                Value valueOfRVar = solver.getInFactOf(assignStmt).get(assignStmt.getRValue());
                 res = cp.meetValue(res, valueOfRVar);
             }
             return res;
@@ -344,8 +319,8 @@ public class InterConstantPropagation extends
         private final Map<InstanceFieldAccess, Set<LoadField>> loadFieldsOfInstanceFieldAccess;
         private final Map<FieldRef, Set<StoreField>> storeFieldsOfStaticFieldAccess;
         private final Map<FieldRef, Set<LoadField>> loadFieldsOfStaticFieldAccess;
-        private final Map<ArrayAccess, Set<StoreArray>> storeArraysOfArrayAccess;
-        private final Map<ArrayAccess, Set<LoadArray>> loadArraysOfArrayAccess;
+        private final Map<ArrayIndexAccess, Set<StoreArray>> storeArraysOfArrayAccess;
+        private final Map<ArrayIndexAccess, Set<LoadArray>> loadArraysOfArrayAccess;
 
         LoadStoreStmtCache() {
             aliasCache = new HashMap<>();
@@ -359,7 +334,7 @@ public class InterConstantPropagation extends
 
         /** @return all aliases of given var including itself from the alias cache. */
         private Set<Var> getAliasesOf(Var var) {
-            return getOrCache(aliasCache, var, this::findAliasesOf);
+            return getAndCache(aliasCache, var, this::findAliasesOf);
         }
 
         /** @return all aliases of given base including itself from the pointer analysis result. */
@@ -385,9 +360,9 @@ public class InterConstantPropagation extends
          * @param <V> The type of the set of the value.
          * @return the set of the value
          */
-        private <K, V> Set<V> getOrCache(Map<K, Set<V>> cache, K key, Function<K, Set<V>> finder) {
+        private <K, V> Set<V> getAndCache(Map<K, Set<V>> cache, K key, Function<K, Set<V>> finder) {
             Set<V> res = cache.get(key);
-            if (res == null) {
+            if (res == null || res.isEmpty()) {
                 res = finder.apply(key);
                 cache.put(key, res);
             }
@@ -398,7 +373,7 @@ public class InterConstantPropagation extends
 
         /** @return the related load fields of given key(x.f): a = x.f. */
         Set<LoadField> getLoadFields(InstanceFieldAccess key) {
-            return getOrCache(loadFieldsOfInstanceFieldAccess, key, this::findInstanceLoadFields);
+            return getAndCache(loadFieldsOfInstanceFieldAccess, key, this::findInstanceLoadFields);
         }
 
         /**
@@ -411,7 +386,8 @@ public class InterConstantPropagation extends
 
         /** @return the related store fields of given key(x.f): x.f = b. */
         Set<StoreField> getStoreFields(InstanceFieldAccess key) {
-            return getOrCache(storeFieldsOfInstanceFieldAccess, key, this::findInstanceStoreFields);
+            return getAndCache(storeFieldsOfInstanceFieldAccess, key,
+                    this::findInstanceStoreFields);
         }
 
         /**
@@ -478,6 +454,115 @@ public class InterConstantPropagation extends
 
         private <K, V> Set<V> get(Map<K, Set<V>> map, K key) {
             return map.getOrDefault(key, new HashSet<>());
+        }
+
+        /* ---------------------- Array Access ---------------------- */
+
+        Set<StoreArray> getStoreArrays(ArrayIndexAccess arrayIndexAccess) {
+            return getAndCache(storeArraysOfArrayAccess, arrayIndexAccess, this::findStoreArrays);
+        }
+
+        Set<LoadArray> getLoadArrays(ArrayIndexAccess arrayIndexAccess) {
+            return getAndCache(loadArraysOfArrayAccess, arrayIndexAccess, this::findLoadArrays);
+        }
+
+        /** @return all storeArrays of given arrayAccess (a[i]): a[i] = b */
+        private Set<StoreArray> findStoreArrays(ArrayIndexAccess arrayIndexAccess) {
+            return findLoadOrStoreArrays(arrayIndexAccess, Var::getStoreArrays);
+        }
+
+        /** @return all loadArrays of given arrayAccess (a[i]): b = a[i] */
+        private Set<LoadArray> findLoadArrays(ArrayIndexAccess arrayIndexAccess) {
+            return findLoadOrStoreArrays(arrayIndexAccess, Var::getLoadArrays);
+        }
+
+        private <T extends Stmt> Set<T> findLoadOrStoreArrays(ArrayIndexAccess arrayIndexAccess,
+                Function<Var, List<T>> aliasStmtsGetter
+        ) {
+            Set<T> loadOrStoreArrays = new HashSet<>();
+            Var base = arrayIndexAccess.getBase();
+            Value index = arrayIndexAccess.getIndex();
+
+            for (Var alias : getAliasesOf(base)) {
+                for (T stmt : aliasStmtsGetter.apply(alias)) {
+                    ArrayIndexAccess possibleAlias = makeArrayIndexAccess(stmt);
+                    if (indexMeetAlias(index, possibleAlias.getIndex())) {
+                        loadOrStoreArrays.add(stmt);
+                    }
+                }
+            }
+            return loadOrStoreArrays;
+        }
+
+        private ArrayIndexAccess makeArrayIndexAccess(Stmt stmt) {
+            if (stmt instanceof LoadArray loadArray) {
+                return new ArrayIndexAccess(loadArray);
+            } else if (stmt instanceof StoreArray storeArray) {
+                return new ArrayIndexAccess(storeArray);
+            } else {
+                throw new AnalysisException(
+                        "The stmt " + stmt + " is not LoadArray or StoreArray!");
+            }
+        }
+
+        /** @return true if the index1 and index2 meet the requirement of array access alias. */
+        private boolean indexMeetAlias(Value index1, Value index2) {
+            if (index1.isUndef() || index2.isUndef()) {
+                return false;
+            } else if (index1.isNAC() || index2.isNAC()) {
+                return true;
+            } else {
+                return index1.getConstant() == index2.getConstant();
+            }
+        }
+    }
+
+    /** Represents an ArrayAccess with specific index value. */
+    private class ArrayIndexAccess {
+        private final Var base;
+        private final Value index;
+
+        @Override
+        public boolean equals(Object o) {
+            if (this == o) return true;
+            if (o == null || getClass() != o.getClass()) return false;
+            ArrayIndexAccess that = (ArrayIndexAccess) o;
+            return Objects.equals(base, that.base) && Objects.equals(index, that.index);
+        }
+
+        @Override
+        public int hashCode() {
+            return Objects.hash(base, index);
+        }
+
+        @Override
+        public String toString() {
+            return base + "[" + index + "]";
+        }
+
+        ArrayIndexAccess(StoreArray storeArray) {
+            this(storeArray.getArrayAccess(), storeArray);
+        }
+
+        ArrayIndexAccess(LoadArray loadArray) {
+            this(loadArray.getArrayAccess(), loadArray);
+        }
+
+        private ArrayIndexAccess(ArrayAccess arrayAccess, Stmt stmt) {
+            this.base = arrayAccess.getBase();
+            this.index = solver.getInFactOf(stmt).get(arrayAccess.getIndex());
+        }
+
+        Var getBase() {
+            return base;
+        }
+
+        Value getIndex() {
+            return index;
+        }
+
+        public Value accept(ExpEvaluator visitor) {
+            return visitor.visit(this);
         }
     }
 }

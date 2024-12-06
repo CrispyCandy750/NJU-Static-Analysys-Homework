@@ -22,17 +22,11 @@
 
 package pascal.taie.analysis.dataflow.inter;
 
-import pascal.taie.analysis.dataflow.analysis.constprop.CPFact;
 import pascal.taie.analysis.dataflow.fact.DataflowResult;
 import pascal.taie.analysis.graph.icfg.ICFG;
 import pascal.taie.analysis.graph.icfg.ICFGEdge;
-import pascal.taie.util.collection.SetQueue;
 
-import java.util.Collection;
-import java.util.LinkedList;
-import java.util.Queue;
-import java.util.Set;
-import java.util.stream.Collectors;
+import java.util.*;
 
 /**
  * Solver for inter-procedural data-flow analysis.
@@ -78,12 +72,12 @@ class InterSolver<Method, Node, Fact> {
     }
 
     private void doSolve() {
-        workList = new LinkedList<>(icfg.getNodes());
+        workList = new SetQueue<>(icfg.getNodes());
         while (!workList.isEmpty()) {
             Node node = workList.poll();
             if (analysis.transferNode(node, calInFact(node), result.getOutFact(node))) {
                 for (Node succ : icfg.getSuccsOf(node)) { // append successors
-                    appendAbsentNodeInWL(succ);
+                    appendNodeToWL(succ);
                 }
             }
         }
@@ -100,14 +94,41 @@ class InterSolver<Method, Node, Fact> {
     }
 
     /** Append given node to workList, ignoring the existing nodes. */
-    public void appendAbsentNodeInWL(Node node) {
-        if (!workList.contains(node)) {
-            workList.add(node);
-        }
+    public void appendNodeToWL(Node node) {
+        workList.add(node);
     }
 
     /** @return the out fact of given node. */
     public Fact getOutFactOf(Node node) {
         return result.getOutFact(node);
+    }
+
+    /** @return the in fact of given node. */
+    public Fact getInFactOf(Node node) {
+        return result.getInFact(node);
+    }
+
+    /** Queue without duplicate element. */
+    private class SetQueue<E> extends LinkedList<E> {
+        Set<E> elemsInQueue;
+        SetQueue(Collection<? extends E> c) {
+            super(c);
+            elemsInQueue = new HashSet<>(c);
+        }
+
+        @Override
+        public E poll() {
+            E elem = super.poll();
+            elemsInQueue.remove(elem);
+            return elem;
+        }
+
+        @Override
+        public boolean add(E e) {
+            if (elemsInQueue.contains(e)) {
+                return false;
+            }
+            return super.add(e);
+        }
     }
 }
