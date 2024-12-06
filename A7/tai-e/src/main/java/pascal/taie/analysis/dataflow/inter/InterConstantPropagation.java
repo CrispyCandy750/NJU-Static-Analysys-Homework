@@ -53,7 +53,7 @@ public class InterConstantPropagation extends
     public static final String ID = "inter-constprop";
 
     private final ConstantPropagation cp;
-    private FieldAccessEvaluator fieldAccessEvaluator;
+    private final FieldAccessEvaluator fieldAccessEvaluator;
     private final LoadStoreStmtCache loadStoreStmtCache;
 
     private PointerAnalysisResult pta;
@@ -62,6 +62,7 @@ public class InterConstantPropagation extends
         super(config);
         cp = new ConstantPropagation(new AnalysisConfig(ConstantPropagation.ID));
         loadStoreStmtCache = new LoadStoreStmtCache();
+        fieldAccessEvaluator = new FieldAccessEvaluator();
     }
 
     @Override
@@ -69,7 +70,6 @@ public class InterConstantPropagation extends
         String ptaId = getOptions().getString("pta");
         pta = World.get().getResult(ptaId);
         // You can do initialization work here
-        fieldAccessEvaluator = new FieldAccessEvaluator();
     }
 
     @Override
