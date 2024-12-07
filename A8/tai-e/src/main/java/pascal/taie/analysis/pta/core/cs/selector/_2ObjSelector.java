@@ -42,19 +42,28 @@ public class _2ObjSelector implements ContextSelector {
 
     @Override
     public Context selectContext(CSCallSite callSite, JMethod callee) {
-        // TODO - finish me
-        return null;
+        return callSite.getContext();
     }
 
     @Override
     public Context selectContext(CSCallSite callSite, CSObj recv, JMethod callee) {
-        // TODO - finish me
-        return null;
+        Context previousContext = recv.getContext();
+        Obj obj = recv.getObject();
+        if (previousContext.getLength() == 0) {
+            return ListContext.make(obj);
+        } else {
+            return ListContext.make(previousContext.getElementAt(previousContext.getLength() - 1),
+                    obj);
+        }
     }
 
     @Override
     public Context selectHeapContext(CSMethod method, Obj obj) {
-        // TODO - finish me
-        return null;
+        Context context = method.getContext();
+        if (context.getLength() == 0) {
+            return ListContext.make();
+        } else {
+            return ListContext.make(context.getElementAt(context.getLength() - 1));
+        }
     }
 }

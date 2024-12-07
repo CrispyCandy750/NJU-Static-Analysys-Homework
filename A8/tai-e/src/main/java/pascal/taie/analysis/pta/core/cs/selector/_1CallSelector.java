@@ -32,6 +32,7 @@ import pascal.taie.language.classes.JMethod;
 
 /**
  * Implementation of 1-call-site sensitivity.
+ * l: r = x.k(a1,...,ak), call site is l
  */
 public class _1CallSelector implements ContextSelector {
 
@@ -40,21 +41,21 @@ public class _1CallSelector implements ContextSelector {
         return ListContext.make();
     }
 
+    /** @return the line of the call site */
     @Override
     public Context selectContext(CSCallSite callSite, JMethod callee) {
-        // TODO - finish me
-        return null;
+        return selectContext(callSite, null, callee);
     }
 
+    /** @return the line of the call site */
     @Override
     public Context selectContext(CSCallSite callSite, CSObj recv, JMethod callee) {
-        // TODO - finish me
-        return null;
+        return ListContext.make(callSite.getCallSite());
     }
 
+    /** @return the context of the method. (the object is created in this context). */
     @Override
     public Context selectHeapContext(CSMethod method, Obj obj) {
-        // TODO - finish me
-        return null;
+        return ListContext.make();
     }
 }
