@@ -56,8 +56,6 @@ public class TaintAnalysiss {
 
     private final TaintManager manager;
 
-    private final TaintConfig config;
-
     private final Solver solver;
 
     private final CSManager csManager;
@@ -73,7 +71,7 @@ public class TaintAnalysiss {
         this.solver = solver;
         csManager = solver.getCSManager();
         emptyContext = solver.getContextSelector().getEmptyContext();
-        config = TaintConfig.readConfig(
+        TaintConfig config = TaintConfig.readConfig(
                 solver.getOptions().getString("taint-config"),
                 World.get().getClassHierarchy(),
                 World.get().getTypeSystem());
@@ -115,9 +113,9 @@ public class TaintAnalysiss {
 
     /** Analyze the pointer analysis result and find the taint flows. */
     private void analyzeResult(Set<TaintFlow> taintFlows, PointerAnalysisResult result) {
-        result.getCallGraph().edges().forEach(edge -> {
-            analyzeInvoke(edge.getCallSite(), edge.getCallee(), taintFlows, result);
-        });
+        result.getCallGraph().edges().forEach(
+                edge -> analyzeInvoke(edge.getCallSite(), edge.getCallee(), taintFlows, result)
+        );
     }
 
     /** Analyze one invoke → callee and find the taint flows. */
@@ -136,7 +134,7 @@ public class TaintAnalysiss {
     }
 
     /** Cache the map of TaintConfig */
-    private class TaintConfigProcessor {
+    private static class TaintConfigProcessor {
         private final Map<JMethod, Set<Source>> sourceGroup;
         private final Map<JMethod, Set<Sink>> sinkGroup;
         private final Map<JMethod, Set<TaintTransfer>> taintTransferGroup;
@@ -176,7 +174,7 @@ public class TaintAnalysiss {
     /**
      * Represents taint flow graph in context-sensitive pointer analysis.
      */
-    private class TaintFlowGraph {
+    private static class TaintFlowGraph {
         /**
          * Map from a pointer (node) to its successors in TFG.
          */
@@ -212,7 +210,7 @@ public class TaintAnalysiss {
 
         /**
          * Process the {@link Source}
-         * If callee is Source, create taint @{link Source} the assignee of callSite, otherwise do
+         * If callee is Source, create taint {@link Source} the assignee of callSite, otherwise do
          * nothing.
          *
          * @param callSite must be in the call site.
