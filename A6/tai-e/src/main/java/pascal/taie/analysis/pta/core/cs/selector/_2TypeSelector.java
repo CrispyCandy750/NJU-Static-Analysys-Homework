@@ -68,6 +68,6 @@ public class _2TypeSelector implements ContextSelector {
             return ListContext.make();
         } else {
             return ListContext.make(context.getElementAt(context.getLength() - 1));
-        }  // 这里没有注意heap-sensitivity的limit为1
+        }
     }
 }
