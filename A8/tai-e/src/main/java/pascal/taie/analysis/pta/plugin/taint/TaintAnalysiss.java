@@ -25,8 +25,6 @@ package pascal.taie.analysis.pta.plugin.taint;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import pascal.taie.World;
-import pascal.taie.analysis.graph.callgraph.CallGraph;
-import pascal.taie.analysis.graph.callgraph.Edge;
 import pascal.taie.analysis.pta.PointerAnalysisResult;
 import pascal.taie.analysis.pta.core.cs.context.Context;
 import pascal.taie.analysis.pta.core.cs.element.CSManager;
@@ -36,9 +34,12 @@ import pascal.taie.analysis.pta.core.heap.Obj;
 import pascal.taie.analysis.pta.cs.Solver;
 import pascal.taie.analysis.pta.pts.PointsToSet;
 import pascal.taie.analysis.pta.pts.PointsToSetFactory;
+import pascal.taie.ir.exp.InvokeExp;
+import pascal.taie.ir.exp.InvokeInstanceExp;
 import pascal.taie.ir.exp.Var;
 import pascal.taie.ir.stmt.Invoke;
 import pascal.taie.language.classes.JMethod;
+import pascal.taie.language.type.Type;
 import pascal.taie.util.collection.Maps;
 import pascal.taie.util.collection.MultiMap;
 
@@ -65,6 +66,8 @@ public class TaintAnalysiss {
 
     private final TaintConfigProcessor configProcessor;
 
+    private final TaintAnalysisSolver taintAnalysisSolver;
+
     public TaintAnalysiss(Solver solver) {
         manager = new TaintManager();
         this.solver = solver;
@@ -77,41 +80,24 @@ public class TaintAnalysiss {
         logger.info(config);
 
         configProcessor = new TaintConfigProcessor(config);
+        taintAnalysisSolver = new TaintAnalysisSolver();
     }
 
     /** Process the specific method about taint analysis: Source, Sink and TaintTransfer. */
     public void taintProcessCall(Context callerContext, Invoke callSite, JMethod callee) {
-        processSource(callerContext, callSite, callee);
-    }
-
-    /**
-     * Process the {@link Source}
-     * If callee is Source, create taint @{link Source} the assignee of callSite, otherwise do
-     * nothing.
-     *
-     * @param callSite must be in the call site.
-     */
-    private void processSource(Context callerContext, Invoke callSite, JMethod callee) {
-        Var result = callSite.getLValue();
-        if (result == null) {
-            return;
-        }
-
-        PointsToSet taints = PointsToSetFactory.make();
-        for (Source source : configProcessor.getSources(callee)) {
-            taints.addObject(
-                    csManager.getCSObj(emptyContext, manager.makeTaint(callSite, source.type())));
-        }
-
-        if (!taints.isEmpty()) {
-            solver.addPtsToWL(csManager.getCSVar(callerContext, result), taints);
-        }
+        taintAnalysisSolver.processSource(callerContext, callSite, callee);
+        taintAnalysisSolver.buildTaintFlowGraph(callerContext, callSite, callee);
     }
 
 
     /** @return true if the csObj is taint obj, false otherwise. */
     public boolean isTaintObj(CSObj csObj) {
         return csObj.getContext().equals(emptyContext) && manager.isTaint(csObj.getObject());
+    }
+
+    /** Propagate the taint objects with special paths. */
+    public void taintPropagate(Pointer pointer, PointsToSet delta) {
+        taintAnalysisSolver.taintPropagateToTaintSuccs(pointer, delta);
     }
 
     public void onFinish() {
@@ -184,6 +170,155 @@ public class TaintAnalysiss {
         /** @return all taintTransfers corresponding to the given method. */
         Set<TaintTransfer> getTaintTransfers(JMethod method) {
             return taintTransferGroup.getOrDefault(method, new HashSet<>());
+        }
+    }
+
+    /**
+     * Represents taint flow graph in context-sensitive pointer analysis.
+     */
+    private class TaintFlowGraph {
+        /**
+         * Map from a pointer (node) to its successors in TFG.
+         */
+        private final MultiMap<Pointer, TaintTargetPointer> successors = Maps.newMultiMap();
+
+        /**
+         * Adds an edge (source -> target) to this TFG.
+         *
+         * @return true if this PFG changed as a result of the call,
+         * otherwise false.
+         */
+        boolean addEdge(Pointer source, Pointer target, Type typeOfTaintObj) {
+            return successors.put(source, new TaintTargetPointer(target, typeOfTaintObj));
+        }
+
+        /**
+         * @return successors of given pointer in the TFG.
+         */
+        Set<TaintTargetPointer> getSuccsOf(Pointer pointer) {
+            return successors.get(pointer);
+        }
+    }
+
+    private record TaintTargetPointer(Pointer pointer, Type typeOfTaintObj) {
+    }
+
+    private class TaintAnalysisSolver {
+        private final TaintFlowGraph taintFlowGraph;
+
+        TaintAnalysisSolver() {
+            taintFlowGraph = new TaintFlowGraph();
+        }
+
+        /**
+         * Process the {@link Source}
+         * If callee is Source, create taint @{link Source} the assignee of callSite, otherwise do
+         * nothing.
+         *
+         * @param callSite must be in the call site.
+         */
+        void processSource(Context callerContext, Invoke callSite, JMethod callee) {
+            Var result = callSite.getLValue();
+            if (result == null) {
+                return;
+            }
+
+            PointsToSet taints = PointsToSetFactory.make();
+            for (Source source : configProcessor.getSources(callee)) {
+                taints.addObject(
+                        csManager.getCSObj(emptyContext,
+                                manager.makeTaint(callSite, source.type())));
+            }
+
+            if (!taints.isEmpty()) {
+                solver.addPtsToWL(csManager.getCSVar(callerContext, result), taints);
+            }
+        }
+
+        void buildTaintFlowGraph(Context callerContext, Invoke callSite, JMethod callee) {
+            for (TaintTransfer taintTransfer : configProcessor.getTaintTransfers(callee)) {
+                Var from = getSpecificVar(taintTransfer.from(), callSite);
+                Var to = getSpecificVar(taintTransfer.to(), callSite);
+                if (from != null && to != null) {
+                    addTFGEdge(csManager.getCSVar(callerContext, from),
+                            csManager.getCSVar(callerContext, to),
+                            taintTransfer.type());
+                }
+            }
+        }
+
+        /**
+         * @param location arg, result or base of callSite which refers to {@link TaintTransfer}
+         * @return the specific variable arg, result or base of call site according to the location.
+         */
+        private Var getSpecificVar(int location, Invoke callSite) {
+            return switch (location) {
+                case TaintTransfer.BASE -> getBaseVarOf(callSite.getInvokeExp());
+                case TaintTransfer.RESULT -> callSite.getResult();
+                default -> callSite.getInvokeExp().getArg(location);
+            };
+        }
+
+        /** @return the base var of the invokeExp, null if the invokeExp is static invoke. */
+        private Var getBaseVarOf(InvokeExp invokeExp) {
+            if (invokeExp instanceof InvokeInstanceExp invokeInstanceExp) {
+                return invokeInstanceExp.getBase();
+            } else { // static invoke
+                return null;
+            }
+        }
+
+        /**
+         * Adds an edge "source -> target" to the PFG.
+         */
+        private void addTFGEdge(Pointer sourcePointer, Pointer targetPointer, Type typeOfTaintObj) {
+            if (taintFlowGraph.addEdge(sourcePointer, targetPointer, typeOfTaintObj)) {
+                PointsToSet taintObjs = getTaintObjOf(sourcePointer.getPointsToSet());
+                if (!taintObjs.isEmpty()) {
+                    solver.addPtsToWL(targetPointer, taintObjs);
+                }
+            }
+        }
+
+        /**
+         * Propagate the taint objects of pts to the taint successors of given pointer.
+         * The pts have been added to the pts of pointer, here needn't do it again.
+         */
+        void taintPropagateToTaintSuccs(Pointer pointer, PointsToSet pts) {
+            PointsToSet taintObjects = getTaintObjOf(pts);
+            if (taintObjects.isEmpty()) {
+                return;
+            }
+
+            for (TaintTargetPointer taintTargetPointer : taintFlowGraph.getSuccsOf(pointer)) {
+                PointsToSet taintObjWithNewType = changeTaintType(taintObjects,
+                        taintTargetPointer.typeOfTaintObj());
+                solver.addPtsToWL(taintTargetPointer.pointer(), taintObjWithNewType);
+            }
+        }
+
+        /** @return the pts with original invokes and specific type. */
+        private PointsToSet changeTaintType(PointsToSet pts, Type type) {
+            PointsToSet res = PointsToSetFactory.make();
+            for (CSObj taintObj : pts) {
+                Obj newTaintObj = manager.makeTaint(manager.getSourceCall(taintObj.getObject()),
+                        type);
+                res.addObject(csManager.getCSObj(emptyContext, newTaintObj));
+            }
+            return res;
+        }
+
+        /** @return all taint object in the given points-to set. */
+        private PointsToSet getTaintObjOf(PointsToSet pts) {
+            PointsToSet res = PointsToSetFactory.make();
+
+            for (CSObj csObj : pts) {
+                if (isTaintObj(csObj)) {
+                    res.addObject(csObj);
+                }
+            }
+
+            return res;
         }
     }
 }

@@ -49,10 +49,8 @@ import pascal.taie.analysis.pta.plugin.taint.TaintAnalysiss;
 import pascal.taie.analysis.pta.pts.PointsToSet;
 import pascal.taie.analysis.pta.pts.PointsToSetFactory;
 import pascal.taie.config.AnalysisOptions;
-import pascal.taie.ir.exp.InvokeExp;
 import pascal.taie.ir.exp.Var;
 import pascal.taie.ir.stmt.*;
-import pascal.taie.language.classes.JField;
 import pascal.taie.language.classes.JMethod;
 import pascal.taie.language.type.Type;
 import pascal.taie.util.AnalysisException;
@@ -286,6 +284,9 @@ public class Solver {
 
             PointsToSet delta = propagate(pointer, ptsInWL);
 
+            // taint analysis
+            taintAnalysis.taintPropagate(pointer, delta);
+
             if (pointer instanceof CSVar csVar) {
                 for (CSObj csObj : delta) {
                     if (isRegularObj(csObj)) {
@@ -369,20 +370,20 @@ public class Solver {
      */
     private PointsToSet propagate(Pointer pointer, PointsToSet pointsToSet) {
         PointsToSet ptsInPFG = pointer.getPointsToSet();
-        PointsToSet ptsToPropagate = PointsToSetFactory.make();
+        PointsToSet delta = PointsToSetFactory.make();
         for (CSObj csObj : pointsToSet) {
             if (ptsInPFG.addObject(csObj)) {
-                ptsToPropagate.addObject(csObj);
+                delta.addObject(csObj);
             }
         }
 
-        if (!ptsToPropagate.isEmpty()) {
+        if (!delta.isEmpty()) {
             for (Pointer succ : pointerFlowGraph.getSuccsOf(pointer)) {
-                workList.addEntry(succ, ptsToPropagate);
+                workList.addEntry(succ, delta);
             }
         }
 
-        return ptsToPropagate;
+        return delta;
     }
 
     /**
