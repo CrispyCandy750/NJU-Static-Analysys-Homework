@@ -82,7 +82,8 @@ public class Solver {
     private PointerAnalysisResult result;
 
     Solver(AnalysisOptions options, HeapModel heapModel,
-           ContextSelector contextSelector) {
+            ContextSelector contextSelector
+    ) {
         this.options = options;
         this.heapModel = heapModel;
         this.contextSelector = contextSelector;
@@ -98,6 +99,11 @@ public class Solver {
 
     public CSManager getCSManager() {
         return csManager;
+    }
+
+    /** Append the pointer-pts(csObj) to workList to process. */
+    public void addPtsToWL(Pointer pointer, PointsToSet pts) {
+        workList.addEntry(pointer, pts);
     }
 
     void solve() {
@@ -128,6 +134,7 @@ public class Solver {
             return;
         }
         StmtProcessor stmtProcessor = new StmtProcessor(csMethod);
+        // Process New, Assign, static (LoadField, storeField, invoke) statements.
         for (Stmt stmt : csMethod.getMethod().getIR().getStmts()) {
             stmt.accept(stmtProcessor);
         }
@@ -194,7 +201,6 @@ public class Solver {
                 // select callee context
                 Context calleeContext = contextSelector.selectContext(
                         csManager.getCSCallSite(context, invoke), callee);
-
                 addPFGInvokeEdgesAndCGEdge(CallKind.STATIC, context, invoke, calleeContext, callee);
             }
             return null;
@@ -217,6 +223,9 @@ public class Solver {
             addPFGInvokeEdgesFromArgsToParams(callerContext, callSite, calleeContext, callee);
             // ret → assignee
             addPFGInvokeEdgesFromRetToAssignee(callerContext, callSite, calleeContext, callee);
+
+            // taint analysis.
+            taintAnalysis.taintProcessCall(callerContext, callSite, callee);
         }
     }
 
@@ -275,15 +284,25 @@ public class Solver {
             Pointer pointer = entry.pointer();
             PointsToSet ptsInWL = entry.pointsToSet();
 
-            PointsToSet ptsToPropagate = propagate(pointer, ptsInWL);
+            PointsToSet delta = propagate(pointer, ptsInWL);
 
             if (pointer instanceof CSVar csVar) {
-                for (CSObj csObj : ptsToPropagate) {
-                    updateFieldEdges(csVar, csObj);
-                    processCall(csVar, csObj);
+                for (CSObj csObj : delta) {
+                    if (isRegularObj(csObj)) {
+                        updateFieldEdges(csVar, csObj);
+                        processCall(csVar, csObj);
+                    }
                 }
             }
         }
+    }
+
+    /**
+     * @return true if the csObj is regular object, false otherwise.
+     * e.g. csObj may be taint object.
+     */
+    private boolean isRegularObj(CSObj csObj) {
+        return !taintAnalysis.isTaintObj(csObj);
     }
 
     /** csObj → pts(cs), updates the edges of field access statements. */
@@ -369,7 +388,7 @@ public class Solver {
     /**
      * Processes instance calls when points-to set of the receiver variable changes.
      *
-     * @param recv    the receiver variable
+     * @param recv the receiver variable
      * @param recvObj set of new discovered objects pointed by the variable.
      */
     private void processCall(CSVar recv, CSObj recvObj) {
@@ -386,6 +405,7 @@ public class Solver {
                     callee);
         }
     }
+
 
     /** @return the call kind of the given invoke statement. */
     private CallKind selectCallKind(Invoke invoke) {
@@ -406,7 +426,7 @@ public class Solver {
      * Resolves the callee of a call site with the receiver object.
      *
      * @param recv the receiver object of the method call. If the callSite
-     *             is static, this parameter is ignored (i.e., can be null).
+     * is static, this parameter is ignored (i.e., can be null).
      * @param callSite the call site to be resolved.
      * @return the resolved callee.
      */
