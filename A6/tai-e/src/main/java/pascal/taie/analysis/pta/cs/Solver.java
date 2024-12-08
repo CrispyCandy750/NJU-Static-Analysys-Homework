@@ -108,10 +108,8 @@ class Solver {
 
     /**
      * Processes the statements in context-sensitive new reachable methods.
-     * (Replace the previous StmtProcessor class)
      * These statements create determined edges: New, Copy, static (LoadField, StoreField & Invoke).
      */
-    //  private class StmtProcessor implements StmtVisitor<Void>
     private class StmtProcessor implements StmtVisitor<Void> {
 
         private final CSMethod csMethod;
@@ -169,7 +167,6 @@ class Solver {
         /** Process the static invoke. */
         public Void visit(Invoke invoke) {
             if (invoke.isStatic()) {
-//                JMethod callee = invoke.getMethodRef().resolve();
                 JMethod callee = resolveCallee(null, invoke);
                 // select callee context
                 Context calleeContext = contextSelector.selectContext(
