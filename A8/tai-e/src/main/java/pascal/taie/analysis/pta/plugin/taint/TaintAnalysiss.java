@@ -213,7 +213,7 @@ public class TaintAnalysiss {
          * If callee is Source, create taint {@link Source} the assignee of callSite, otherwise do
          * nothing.
          *
-         * @param callSite must be in the call site.
+         * @param callSite must be in the call graph.
          */
         void processSource(Context callerContext, Invoke callSite, JMethod callee) {
             Var result = callSite.getLValue();
