@@ -273,7 +273,7 @@ public class TaintAnalysiss {
             if (taintFlowGraph.addEdge(sourcePointer, targetPointer, typeOfTaintObj)) {
                 PointsToSet taintObjs = getTaintObjOf(sourcePointer.getPointsToSet());
                 if (!taintObjs.isEmpty()) {
-                    solver.addPtsToWL(targetPointer, taintObjs);
+                    solver.addPtsToWL(targetPointer, changeTaintType(taintObjs, typeOfTaintObj));
                 }
             }
         }
